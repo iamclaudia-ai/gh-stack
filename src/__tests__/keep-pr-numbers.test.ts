@@ -191,3 +191,47 @@ describe("update-prs names its stack instead of needing a checkout", () => {
     expect(res.out).toContain("No active stack named nope");
   });
 });
+
+// #103: add's closing line told you to open PRs with submit even when every
+// branch it tracked already had one recorded.
+describe("add's closing line says which PRs are already recorded (#103)", () => {
+  test("every branch has a PR: names them and doesn't suggest submit", async () => {
+    await $`git -C ${tmpDir} config branch.parent.ghstack-pr 141`.quiet();
+    await $`git -C ${tmpDir} config branch.child.ghstack-pr 143`.quiet();
+
+    const res = await runCli(["add", "child"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(res.out).toContain("PRs #141, #143 are already recorded.");
+    expect(res.out).not.toContain("gh-stack submit");
+  });
+
+  test("some branches have PRs: names them and points the rest at submit", async () => {
+    await $`git -C ${tmpDir} config branch.parent.ghstack-pr 141`.quiet();
+
+    const res = await runCli(["add", "child"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(res.out).toContain(
+      "PR #141 is already recorded. Run gh-stack submit to open one for the other branch.",
+    );
+  });
+
+  test("no branch has a PR: suggests submit as before", async () => {
+    const res = await runCli(["add", "child"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(res.out).toContain("now work. Run gh-stack submit to open PRs.");
+  });
+
+  test("add --parent: a PR recorded for the branch is named", async () => {
+    await $`git -C ${tmpDir} config branch.parent.ghstack-pr 141`.quiet();
+    await $`git -C ${tmpDir} config branch.child.ghstack-pr 143`.quiet();
+
+    const res = await runCli(["add", "child", "--parent", "parent"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(res.out).toContain("PRs #141, #143 are already recorded.");
+    expect(res.out).not.toContain("gh-stack submit");
+  });
+});
