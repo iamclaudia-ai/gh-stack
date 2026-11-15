@@ -25,6 +25,7 @@ import {
   getCommitFiles,
   getPrMergeState,
   getRepoNwo,
+  openPrsTargeting,
   resyncPrHead,
 } from "../lib/github.ts";
 import { verifyCollapse, type CollapsedChild } from "../lib/collapse-guard.ts";
@@ -36,6 +37,7 @@ import { stripSeqSuffix } from "./update-prs.ts";
 import {
   planMerges,
   advancePastMerged,
+  deleteMergedBranches,
   survivorsOf,
   type BranchReview,
   type MergeAction,
@@ -106,18 +108,19 @@ async function squashSubjectArgs(prNumber: number): Promise<string[]> {
  *
  * Only a state that settles genuinely non-mergeable (real conflict / failing
  * required check) — or exhausted retries — is a hard failure.
+ *
+ * Never with `--delete-branch`: `-d` deletes the merged branches at the end,
+ * once no open PR targets them (deleteMergedBranches, #100).
  */
 async function squashMergeWithRetry(
   prNumber: number,
   branch: string,
-  deleteFlag: boolean,
   s: ReturnType<typeof p.spinner>,
 ): Promise<{ ok: true } | { ok: false; stderr: string; genuine: boolean }> {
   const maxAttempts = MERGE_RETRY_BACKOFF_MS.length + 1;
   const subject = await squashSubjectArgs(prNumber);
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const ghArgs = ["pr", "merge", String(prNumber), "--squash", ...subject];
-    if (deleteFlag) ghArgs.push("--delete-branch");
 
     const proc = Bun.spawn(["gh", ...ghArgs], { stdout: "pipe", stderr: "pipe" });
     const stderr = await new Response(proc.stderr).text();
@@ -343,7 +346,9 @@ stop, with a retry for transient failures); with --yes it stops. --base runs
 the same check when the base PR carries PRs collapsed into it earlier.
 
 OPTIONS
-  -d, --delete-branch  Delete remote branches after merging
+  -d, --delete-branch  Delete the merged branches (on GitHub and locally) once
+                       no open PR targets them; one that still has a PR on
+                       it is kept, with a note
       --approved       Collapse only the approved run (from the base up)
       --base           Merge just the bottom PR into main, re-root the next
       --collapse       Stop after collapsing into the base PR (don't merge to
@@ -610,7 +615,7 @@ OPTIONS
 
     s.message(`Squash-merging PR #${childPrNum} via GitHub...`);
 
-    const result = await squashMergeWithRetry(childPrNum, childBranch, deleteFlag, s);
+    const result = await squashMergeWithRetry(childPrNum, childBranch, s);
 
     if (result.ok) {
       s.stop(`Merged PR #${childPrNum} into ${pc.blue(parentBranch)}`);
@@ -635,6 +640,17 @@ OPTIONS
   // Before the base goes anywhere, make sure it still holds their content (#28).
   if (!args.includes("--skip-collapse-check")) {
     await ensureCollapseIntact(stack, rangeOrdered, baseBranch, basePr!);
+  }
+
+  // -d: the squashed children can go now, except one an open PR still
+  // targets, like the top of an --approved run with an unapproved tail (#100).
+  if (deleteFlag) {
+    await deleteMergedBranches(
+      reversed.slice(0, -1).filter((b) => {
+        const parent = stack.branches[b]!.parent;
+        return parent !== "main" && parent !== "master";
+      }),
+    );
   }
 
   // ─── --collapse: stop here. Base PR holds the cumulative diff; let the
@@ -767,10 +783,25 @@ OPTIONS
     process.exit(2);
   }
 
+  // Auto-merge lands the base later, on GitHub, so -d has to hand gh
+  // --delete-branch now. Only when no open PR targets the base (#100).
+  let deleteBase = false;
+  if (deleteFlag) {
+    const targeting = await openPrsTargeting(baseBranch);
+    deleteBase = targeting !== null && targeting.length === 0;
+    if (!deleteBase) {
+      p.log.warn(
+        targeting === null
+          ? `Keeping ${pc.yellow(baseBranch)} after it merges: couldn't ask GitHub whether a PR still targets it.`
+          : `Keeping ${pc.yellow(baseBranch)} after it merges: PR ${targeting.map((n) => `#${n}`).join(", ")} still targets it.`,
+      );
+    }
+  }
+
   const enableAutoMerge = async (): Promise<{ ok: boolean; stderr: string }> => {
     const ghArgs = ["pr", "merge", String(basePr), "--squash", "--auto"];
     if (basePr != null) ghArgs.push(...(await squashSubjectArgs(basePr)));
-    if (deleteFlag) ghArgs.push("--delete-branch");
+    if (deleteBase) ghArgs.push("--delete-branch");
     const proc = Bun.spawn(["gh", ...ghArgs], { stdout: "pipe", stderr: "pipe" });
     const stderr = await new Response(proc.stderr).text();
     const exitCode = await proc.exited;
@@ -1316,7 +1347,7 @@ async function mergeBaseOnly(deleteFlag: boolean, dryRun: boolean, args: string[
       }
 
       s.message(`Squash-merging PR #${prNum} into ${trunk}...`);
-      const result = await squashMergeWithRetry(prNum, mergedBranch, deleteFlag, s);
+      const result = await squashMergeWithRetry(prNum, mergedBranch, s);
       if (result.ok) {
         s.stop(`Merged PR #${prNum} into ${pc.green(trunk)}`);
       } else {
@@ -1400,6 +1431,10 @@ async function mergeBaseOnly(deleteFlag: boolean, dryRun: boolean, args: string[
     }
     split = res.split;
   }
+
+  // -d: only now, after the next branch's PR was retargeted off it. A PR
+  // still on it (the retarget failed, or --no-push) keeps it (#100).
+  if (deleteFlag) await deleteMergedBranches([baseBranch]);
 
   // Did the whole stack drain, or is there a tail to restack?
   const survivingStack = meta.stacks[stackName];

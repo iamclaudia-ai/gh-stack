@@ -426,3 +426,35 @@ export function ghStubEnv(stubDir: string): Record<string, string> {
     GH_STATE: `${stubDir}/next-pr`,
   };
 }
+
+/**
+ * The PR-base part of the fake gh (#100): `pr list --base B` prints the open
+ * PRs whose N.json has base B, `pr edit N --base B` records B in N.json (and
+ * fails while $GH_PR_DIR/edit-N.fails counts down), and the API delete of
+ * `git/refs/heads/<b>` deletes <b> on origin.
+ */
+export const PR_BASE_STUB = `if [ "$1 $2" = "pr list" ]; then
+  base=""; prev=""
+  for a in "$@"; do [ "$prev" = "--base" ] && base="$a"; prev="$a"; done
+  for f in "$GH_PR_DIR"/[0-9]*.json; do
+    grep -q '"state":"OPEN"' "$f" && grep -q '"baseRefName":"'"$base"'"' "$f" && basename "$f" .json
+  done
+  exit 0
+fi
+if [ "$1 $2" = "pr edit" ]; then
+  fails="$GH_PR_DIR/edit-$3.fails"
+  if [ -f "$fails" ] && [ "$(cat "$fails")" -gt 0 ]; then
+    echo $(( $(cat "$fails") - 1 )) > "$fails"
+    echo "GraphQL: Something went wrong (updatePullRequest)" >&2
+    exit 1
+  fi
+  if [ "$4" = "--base" ]; then
+    j="$GH_PR_DIR/$3.json"
+    sed 's/"baseRefName":"[^"]*"/"baseRefName":"'"$5"'"/' "$j" > "$j.tmp" && mv "$j.tmp" "$j"
+  fi
+  exit 0
+fi
+if [ "$1 $2 $3" = "api --method DELETE" ]; then
+  git push -q origin --delete "\${4#*/git/refs/heads/}" || exit 1
+  exit 0
+fi`;

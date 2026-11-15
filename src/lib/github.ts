@@ -252,18 +252,67 @@ export async function updatePrTitle(prNumber: number, title: string): Promise<bo
   }
 }
 
+/** Waits between `gh pr edit --base` attempts (#100). */
+const RETARGET_BACKOFF_MS = [1000, 3000];
+
+export type GhResult = { ok: true } | { ok: false; error: string };
+
+/** gh's own message for a failed call, or its exit code when it printed none. */
+function ghError(r: { exitCode: number; stderr: Buffer; stdout: Buffer }): string {
+  return r.stderr.toString().trim() || r.stdout.toString().trim() || `gh exited ${r.exitCode}`;
+}
+
 /**
  * Repoint a PR's base branch on GitHub (`gh pr edit --base <base>`). Used when a
  * stack advances past a merged bottom: the new bottom PR must retarget `main`.
- * Returns false on failure.
+ *
+ * Retried with a short backoff: the edit usually comes right after a merge, and
+ * a failure there has left a PR on its merged base (#100). On failure, `error`
+ * is gh's message from the last attempt, for the caller to show.
  */
-export async function setPrBase(prNumber: number, base: string): Promise<boolean> {
-  try {
-    await $`gh pr edit ${prNumber} --base ${base}`.quiet();
-    return true;
-  } catch {
-    return false;
+export async function setPrBase(prNumber: number, base: string): Promise<GhResult> {
+  for (let attempt = 0; ; attempt++) {
+    const r = await $`gh pr edit ${prNumber} --base ${base}`.nothrow().quiet();
+    if (r.exitCode === 0) return { ok: true };
+    const delay = RETARGET_BACKOFF_MS[attempt];
+    if (delay === undefined) return { ok: false, error: ghError(r) };
+    await Bun.sleep(delay);
   }
+}
+
+/**
+ * The open PRs whose base is `branch`, or null when GitHub couldn't be asked.
+ * `merge -d` keeps a merged branch while any PR still targets it: deleting a
+ * PR's base branch makes GitHub close the PR (#100).
+ */
+export async function openPrsTargeting(branch: string): Promise<number[] | null> {
+  const jq = ".[].number";
+  const r = await $`gh pr list --base ${branch} --state open --json number --jq ${jq}`
+    .nothrow()
+    .quiet();
+  if (r.exitCode !== 0) return null;
+  return r.stdout
+    .toString()
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map(Number);
+}
+
+/**
+ * Delete a branch on GitHub through the API, as `gh pr merge --delete-branch`
+ * does. A `git push --delete` would run the repo's pre-push hook, which can be
+ * a full test suite. A branch that's already gone counts as deleted.
+ */
+export async function deleteBranchOnGitHub(branch: string): Promise<GhResult> {
+  // gh fills in {owner}/{repo} from the current repository.
+  const ref = branch.split("/").map(encodeURIComponent).join("/");
+  const endpoint = `repos/{owner}/{repo}/git/refs/heads/${ref}`;
+  const r = await $`gh api --method DELETE ${endpoint}`.nothrow().quiet();
+  if (r.exitCode === 0) return { ok: true };
+  const error = ghError(r);
+  if (/Reference does not exist/i.test(error)) return { ok: true };
+  return { ok: false, error };
 }
 
 /**

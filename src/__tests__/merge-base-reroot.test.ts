@@ -15,6 +15,7 @@ import {
   cleanup,
   createLinearStack,
   createTempRepo,
+  PR_BASE_STUB,
   pushAllBranches,
   readMetadata,
   setupRemote,
@@ -101,6 +102,7 @@ if [ "$1 $2" = "pr merge" ]; then
   exit 0
 fi
 if [ "$1 $2" = "repo view" ]; then echo acme/widgets; exit 0; fi
+${PR_BASE_STUB}
 if [ "$1" = "api" ]; then exit 1; fi
 exit 0
 `,
@@ -161,6 +163,18 @@ async function remoteSha(branch: string): Promise<string> {
   return git(remoteDir, "rev-parse", `refs/heads/${branch}`);
 }
 
+async function remoteHas(branch: string): Promise<boolean> {
+  return (
+    (await $`git -C ${remoteDir} rev-parse --verify -q refs/heads/${branch}`.nothrow().quiet())
+      .exitCode === 0
+  );
+}
+
+/** The fake gh's calls, in order. */
+async function ghCalls(): Promise<string[]> {
+  return (await Bun.file(`${binDir}/gh.log`).text()).trim().split("\n");
+}
+
 /** main moves on "GitHub" with a pr2.txt of its own, so re-rooting pr2 conflicts. */
 async function mainAddsConflictingPr2File(): Promise<void> {
   await git(otherDir, "checkout", "-q", "main");
@@ -201,7 +215,9 @@ describe("merge --base re-roots onto the trunk after the squash (#51)", () => {
     const res = await runCli(["merge", "--base", "--delete-branch"]);
 
     expect(res.exitCode).toBe(0);
+    expect(res.out).toContain("Deleted pr1 on GitHub and locally");
     expect(await git(tmpDir, "branch", "--list", "pr1")).toBe("");
+    expect(await remoteHas("pr1")).toBe(false);
     const squash = await remoteSha("main");
     expect(await contains(remoteDir, squash, "refs/heads/pr2")).toBe(true);
     expect(await git(tmpDir, "rev-list", "--count", `${squash}..pr2`)).toBe("1");
@@ -223,6 +239,76 @@ describe("merge --base re-roots onto the trunk after the squash (#51)", () => {
     expect(await remoteSha("pr2")).toBe(pr2);
     const meta = await readMetadata(tmpDir);
     expect(meta.stacks["test-stack"]!.branches["pr2"]!.parent).toBe("pr1");
+  });
+});
+
+// #100: -d handed gh --delete-branch, so GitHub deleted pr1 the moment PR #1
+// merged, while PR #2 still targeted it. GitHub closes a PR whose base branch
+// is deleted, and won't reopen it once its head has been pushed again.
+describe("merge --base -d deletes the merged branch only once no PR targets it (#100)", () => {
+  test("deletes pr1 after PR #2 is retargeted, not with the merge", async () => {
+    await githubSquashesPr1();
+    await checkout(tmpDir, "pr1");
+
+    const res = await runCli(["merge", "--base", "-d"]);
+
+    expect(res.exitCode).toBe(0);
+    const calls = await ghCalls();
+    expect(calls.filter((c) => c.startsWith("pr merge")).join("\n")).not.toContain(
+      "--delete-branch",
+    );
+    const retarget = calls.indexOf("pr edit 2 --base main");
+    const deletion = calls.findIndex((c) => c.startsWith("api --method DELETE"));
+    expect(retarget).toBeGreaterThan(-1);
+    expect(deletion).toBeGreaterThan(retarget);
+    expect(calls[deletion]).toEndWith("/git/refs/heads/pr1");
+    expect(await remoteHas("pr1")).toBe(false);
+  });
+
+  test("a retarget that keeps failing keeps pr1, on GitHub and locally, and says why", async () => {
+    await githubSquashesPr1();
+    await Bun.write(`${binDir}/edit-2.fails`, "99");
+    await checkout(tmpDir, "pr1");
+
+    const res = await runCli(["merge", "--base", "-d"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(res.out).toContain(
+      "Could not retarget PR #2 (GraphQL: Something went wrong (updatePullRequest))",
+    );
+    expect(res.out).toContain("Kept pr1: PR #2 still targets it.");
+    expect(res.out).toContain("git push origin --delete pr1");
+    const calls = await ghCalls();
+    // Three tries before giving up.
+    expect(calls.filter((c) => c === "pr edit 2 --base main").length).toBeGreaterThanOrEqual(3);
+    expect(calls.some((c) => c.startsWith("api --method DELETE"))).toBe(false);
+    expect(await remoteHas("pr1")).toBe(true);
+    expect(await git(tmpDir, "branch", "--list", "pr1")).not.toBe("");
+  });
+
+  test("a retarget that fails once is retried, and pr1 is then deleted", async () => {
+    await githubSquashesPr1();
+    await Bun.write(`${binDir}/edit-2.fails`, "1");
+    await checkout(tmpDir, "pr1");
+
+    const res = await runCli(["merge", "--base", "-d"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(res.out).toContain("PR #2 base → main");
+    expect(res.out).not.toContain("Could not retarget");
+    expect((await ghCalls()).filter((c) => c === "pr edit 2 --base main").length).toBe(2);
+    expect(await remoteHas("pr1")).toBe(false);
+  });
+
+  test("--no-push leaves PR #2 on pr1, so pr1 is kept", async () => {
+    await githubSquashesPr1();
+    await checkout(tmpDir, "pr1");
+
+    const res = await runCli(["merge", "--base", "-d", "--no-push"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(res.out).toContain("Kept pr1: PR #2 still targets it.");
+    expect(await remoteHas("pr1")).toBe(true);
   });
 });
 
