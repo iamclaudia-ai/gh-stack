@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.19.27
+
+### 🐛 Fixes
+- **`merge -d` no longer deletes a branch that an open PR still targets.** `-d` passed `--delete-branch` to `gh pr merge`, so GitHub deleted the merged branch the moment it merged, before `merge --base` had moved the next PR onto main. If that retarget failed, GitHub closed the next PR, and wouldn't reopen it once its re-rooted head was pushed. `merge --approved -d` deleted the top of the approved run while the unapproved tail's PR still targeted it. Now `-d` deletes at the end of the run, on GitHub and locally, and keeps any branch an open PR still targets (or that GitHub can't be asked about), saying which PR and how to delete it later. The base's auto-merge still deletes it when it lands, unless an open PR targets it. Deletes go through the GitHub API, as before, so the repo's pre-push hook doesn't run. (#100, #104)
+- **Retargeting a PR is retried** twice, after 1s and then 3s, and a retarget that still fails says why, with gh's message, in `merge`, `restack` and `join`. (#104)
+- **`gh-stack add` names the PRs the tracked branches already have** instead of always saying "Run gh-stack submit to open PRs". It suggests `submit` only for the branches without one. (#103, #105)
+
+### 📦 Dependencies
+- `@clack/prompts` 1.9.0. Dev tooling: `oxlint` 1.93.0, `oxfmt` 0.78.0. (#101, #102)
+
 ## 0.19.26
 
 ### 🐛 Fixes
