@@ -14,7 +14,7 @@ import * as git from "../lib/git.ts";
 import { gateLegacyMetadata } from "../lib/safety.ts";
 import { readMetadata, writeMetadata, findStackForBranch, stackBase } from "../lib/metadata.ts";
 import { colocatedBranches, describeSkipped, resolveOrCreateStack } from "../lib/chain.ts";
-import type { StackMetadata } from "../types.ts";
+import type { Stack, StackMetadata } from "../types.ts";
 
 export default async function add(args: string[]): Promise<void> {
   if (args.includes("--help")) {
@@ -124,9 +124,31 @@ EXAMPLES
   if (resolution.skipped.length > 0) p.log.warn(describeSkipped(resolution.skipped));
   if (resolution.created && resolution.chain.length === 1) await warnIfColocated(branch, trunk);
 
-  p.outro(
-    `Tracked — ${pc.green("gh-stack sync")}/${pc.green("restack")} now work. ${pc.dim("Run")} ${pc.green("gh-stack submit")} ${pc.dim("to open PRs.")}`,
-  );
+  p.outro(trackedOutro(stack, resolution.addedBranches));
+}
+
+/**
+ * The closing line. `submit` is only suggested for branches that still need a
+ * PR: a branch can arrive with one recorded in git config by another
+ * worktree's `submit` (the dependency sweep registers its stack this way). (#103)
+ */
+export function trackedOutro(stack: Stack, branches: string[]): string {
+  const prs = branches.flatMap((b) => {
+    const pr = stack.branches[b]?.pr;
+    return pr != null ? [`#${pr}`] : [];
+  });
+  const missing = branches.length - prs.length;
+  const tracked = `Tracked — ${pc.green("gh-stack sync")}/${pc.green("restack")} now work.`;
+  if (prs.length === 0) {
+    return `${tracked} ${pc.dim("Run")} ${pc.green("gh-stack submit")} ${pc.dim("to open PRs.")}`;
+  }
+  const have = `${pc.dim(prs.length === 1 ? "PR" : "PRs")} ${prs.join(", ")} ${pc.dim(prs.length === 1 ? "is" : "are")} ${pc.dim("already recorded.")}`;
+  if (missing === 0) return `${tracked} ${have}`;
+  const rest =
+    missing === 1
+      ? "to open one for the other branch."
+      : `to open PRs for the other ${missing} branches.`;
+  return `${tracked} ${have} ${pc.dim("Run")} ${pc.green("gh-stack submit")} ${pc.dim(rest)}`;
 }
 
 /**
@@ -231,7 +253,5 @@ async function addUnderParent(
       ? `Re-homed ${pc.yellow(branch)} onto ${pc.yellow(parent)} in stack ${pc.yellow(targetStackName)} ${pc.dim(`(removed one-branch stack ${oldStackName})`)}`
       : `Added ${pc.yellow(branch)} onto ${pc.yellow(parent)} in stack ${pc.yellow(targetStackName)}`,
   );
-  p.outro(
-    `Tracked — ${pc.green("gh-stack sync")}/${pc.green("restack")} now work. ${pc.dim("Run")} ${pc.green("gh-stack submit")} ${pc.dim("to open PRs.")}`,
-  );
+  p.outro(trackedOutro(target, [...adoptedParents, branch]));
 }
