@@ -222,7 +222,7 @@ Lands PRs by merging them on GitHub, so they show as "Merged", linked tickets cl
 - **`--approved`.** The same collapse, but only up to the highest PR in an unbroken approved run from the bottom (an unapproved PR4 caps it at PR3 even if PR5 is approved). The rest stays stacked; after the base PR lands, `gh-stack sync` re-roots it onto main.
 - **`--base`.** Squash-merges only the bottom PR into main, then re-roots the next branch onto main and restacks above it. One PR per run. If the re-root stops on a conflict, resolve it, `git rebase --continue`, and re-run `merge --base`. `--no-push` (or `GH_STACK_NO_PUSH=1`) still merges the PR but keeps the re-root local until `submit`; the `[restack] push` config doesn't apply here. `--overwrite-remote` is passed on to that restack.
 - `--collapse`: with the default or `--approved`, stop after collapsing into the base PR so you can review the combined diff on GitHub; re-run `merge` to finish. Alias: `--stop-at-base`.
-- `-d, --delete-branch`: delete the remote branches after merging
+- `-d, --delete-branch`: delete the merged branches, on GitHub and locally, at the end of the run. A branch that an open PR still targets is kept and named (say, the next PR's retarget failed, or an unapproved tail sits on it), because GitHub closes a PR whose base branch is deleted.
 - `--skip-collapse-check`: skip the check below
 - `--dry-run`: show what would happen
 

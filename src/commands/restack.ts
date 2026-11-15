@@ -1540,9 +1540,10 @@ async function retargetIfStale(
 ): Promise<void> {
   const entry = meta.stacks[stackName]?.branches[branch];
   if (entry?.pr == null || !entry.prBase || entry.prBase === entry.parent) return;
-  if (!(await setPrBase(entry.pr, entry.parent))) {
+  const moved = await setPrBase(entry.pr, entry.parent);
+  if (!moved.ok) {
     p.log.warn(
-      `PR #${entry.pr} still targets ${entry.prBase}; couldn't retarget it to ${entry.parent}. ${pc.green("gh-stack submit")} retries.`,
+      `PR #${entry.pr} still targets ${entry.prBase}; couldn't retarget it to ${entry.parent} (${moved.error}). ${pc.green("gh-stack submit")} retries.`,
     );
     return;
   }

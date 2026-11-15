@@ -20,6 +20,7 @@ import {
   createBranch,
   createTempRepo,
   makeCommit,
+  PR_BASE_STUB,
   pushAllBranches,
   readMetadata,
   setupRemote,
@@ -115,6 +116,7 @@ echo "$*" >> "$GH_LOG"
 if [ "$1 $2" = "pr view" ]; then cat "$GH_PR_DIR/$3.json"; exit 0; fi
 if [ "$1 $2" = "pr merge" ]; then sh "$GH_PR_DIR/merge-$3.sh"; exit $?; fi
 if [ "$1 $2" = "repo view" ]; then echo acme/widgets; exit 0; fi
+${PR_BASE_STUB}
 if [ "$1" = "api" ]; then exit 1; fi
 exit 0
 `,
@@ -297,6 +299,51 @@ describe("merge --approved when the repo doesn't allow auto-merge (#54)", () => 
     expect(res.out).toContain("This repo doesn't allow auto-merge");
     expect(res.out).toContain("gh pr merge 1 --squash");
     expect(res.out).not.toContain("gh pr merge 1 --squash --auto");
+  });
+});
+
+// #100: -d handed gh --delete-branch for every squash in the collapse, so
+// pr2 was deleted the moment PR #2 merged into pr1, and GitHub closed PR #3,
+// the unapproved tail, which targets it.
+describe("merge --approved -d keeps a branch the unapproved tail targets (#100)", () => {
+  test("pr2 stays for PR #3; pr1 is still deleted when its auto-merge lands", async () => {
+    const ready = { state: "OPEN", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" };
+    await writePr(1, {
+      ...ready,
+      reviewDecision: "APPROVED",
+      headRefName: "pr1",
+      baseRefName: "main",
+    });
+    await writePr(2, {
+      ...ready,
+      reviewDecision: "APPROVED",
+      headRefName: "pr2",
+      baseRefName: "pr1",
+    });
+    await writePr(3, {
+      ...ready,
+      reviewDecision: "REVIEW_REQUIRED",
+      headRefName: "pr3",
+      baseRefName: "pr2",
+    });
+    await Bun.write(
+      `${binDir}/merge-2.sh`,
+      `printf '{"number":2,"state":"MERGED","headRefName":"pr2","baseRefName":"pr1"}' > '${binDir}/2.json'\n`,
+    );
+    await Bun.write(`${binDir}/merge-1.sh`, "exit 0\n");
+    await checkout(tmpDir, "pr1");
+
+    const res = await runCli(["merge", "--approved", "-d", "--skip-collapse-check"]);
+
+    expect(res.out).toContain("Kept pr2: PR #3 still targets it.");
+    expect(await git(remoteDir, "branch", "--list", "pr2")).not.toBe("");
+    const calls = (await Bun.file(`${binDir}/gh.log`).text()).trim().split("\n");
+    const collapse = calls.find((c) => c.startsWith("pr merge 2 "))!;
+    expect(collapse).not.toContain("--delete-branch");
+    // No open PR targets pr1, so its auto-merge still deletes it when it lands.
+    const auto = calls.find((c) => c.startsWith("pr merge 1 "))!;
+    expect(auto).toContain("--auto");
+    expect(auto).toContain("--delete-branch");
   });
 });
 

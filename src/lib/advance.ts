@@ -24,7 +24,7 @@ import * as git from "./git.ts";
 import type { Stack, StackMetadata } from "../types.ts";
 import { getOrderedBranches, removeBranchFromStack, writeMetadata } from "./metadata.ts";
 import { resolveRestackBoundary } from "./snapshot.ts";
-import { setPrBase } from "./github.ts";
+import { deleteBranchOnGitHub, openPrsTargeting, setPrBase } from "./github.ts";
 
 /** What a single bottom branch needs: an active squash-merge, or just advancing
  *  past one that already merged outside the tool. */
@@ -315,12 +315,12 @@ export async function advancePastMerged(opts: {
         for (const line of git.pushFailureHint(child, pushed)) console.log(`  ${line}`);
       } else if (childPr != null) {
         const moved = await setPrBase(childPr, recordedBase);
-        if (moved) {
+        if (moved.ok) {
           retargeted = true;
           p.log.success(`PR #${childPr} base → ${pc.green(recordedBase)}`);
         } else {
           p.log.warn(
-            `Could not retarget PR #${childPr} — the next push of ${child} retries, or set its base to ${recordedBase} manually`,
+            `Could not retarget PR #${childPr} (${moved.error}) — the next push of ${child} retries, or set its base to ${recordedBase} manually`,
           );
         }
       }
@@ -353,4 +353,60 @@ export async function advancePastMerged(opts: {
     await writeMetadata(meta);
   }
   return { ok: true, split };
+}
+
+/**
+ * `merge -d`: delete the merged branches, on GitHub and locally, once no open
+ * PR targets them (#100).
+ *
+ * `gh pr merge --delete-branch` deletes a PR's branch the moment it merges,
+ * before merge has re-rooted the next branch and retargeted its PR. GitHub
+ * closes a PR whose base branch is deleted, and won't reopen it once its head
+ * has been pushed again. So merge squash-merges without it and calls this at
+ * the end instead: a branch that an open PR still targets is kept (a failed
+ * retarget, `--no-push`, an unapproved tail), and so is one GitHub couldn't be
+ * asked about.
+ */
+export async function deleteMergedBranches(branches: string[]): Promise<void> {
+  const current = await git.currentBranch().catch(() => "");
+  for (const branch of new Set(branches)) {
+    const targeting = await openPrsTargeting(branch);
+    const later = `delete it with ${pc.green(`git push origin --delete ${branch}`)}`;
+    if (targeting === null) {
+      p.log.warn(
+        `Kept ${pc.yellow(branch)}: couldn't ask GitHub whether a PR still targets it. Once none does, ${later}`,
+      );
+      continue;
+    }
+    if (targeting.length > 0) {
+      const prs = targeting.map((n) => `#${n}`).join(", ");
+      p.log.warn(
+        `Kept ${pc.yellow(branch)}: PR ${prs} still ${targeting.length === 1 ? "targets" : "target"} it. Once ${targeting.length === 1 ? "it moves" : "they move"}, ${later}`,
+      );
+      continue;
+    }
+
+    const where: string[] = [];
+    if (await git.remoteBranchExists(branch)) {
+      const deleted = await deleteBranchOnGitHub(branch);
+      if (!deleted.ok) {
+        p.log.warn(`Could not delete ${pc.yellow(branch)} on GitHub (${deleted.error})`);
+        continue;
+      }
+      // Like `git push --delete`, drop the remote-tracking ref too.
+      await git.runGit(["update-ref", "-d", `refs/remotes/origin/${branch}`]);
+      where.push("on GitHub");
+    }
+    // The local copy goes too, as with gh's --delete-branch, unless a
+    // worktree has it checked out.
+    if (
+      (await git.localBranchExists(branch)) &&
+      branch !== current &&
+      !(await git.worktreeHolding(branch)) &&
+      (await git.deleteLocalBranch(branch))
+    ) {
+      where.push("locally");
+    }
+    if (where.length > 0) p.log.success(`Deleted ${pc.yellow(branch)} ${where.join(" and ")}`);
+  }
 }

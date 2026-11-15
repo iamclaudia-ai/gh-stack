@@ -684,11 +684,14 @@ async function retargetPrs(plan: JoinPlan): Promise<Retarget[]> {
   const targets = plannedRetargets(plan);
   const done: Retarget[] = [];
   for (const t of targets) {
-    if (await setPrBase(t.pr, t.base)) {
+    const moved = await setPrBase(t.pr, t.base);
+    if (moved.ok) {
       p.log.success(`PR #${t.pr} (${t.branch}) base → ${pc.green(t.base)}`);
       done.push(t);
     } else {
-      p.log.warn(`Could not retarget PR #${t.pr} — run ${pc.green("gh-stack submit")} to retry`);
+      p.log.warn(
+        `Could not retarget PR #${t.pr} (${moved.error}) — run ${pc.green("gh-stack submit")} to retry`,
+      );
     }
   }
 
