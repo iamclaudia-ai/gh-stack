@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.19.29
+
+### 🐛 Fixes
+- **`gh-stack delete` removes the remote branch through the GitHub API**, as `merge -d` does, not with `git push origin --delete`. That push ran the repo's pre-push hook, which in many repos is a full lint and test run, so deleting one branch could take minutes or hang an agent's tool call. The remote-tracking ref goes too, and if GitHub refuses, the warning now includes gh's message. (#107, #113)
+
+### 🔧 Repo
+- **The pre-push hook skips its checks for pushes that only delete branches or push tags**, so `git push origin vX` and `git push origin --delete <branch>` return at once. Branch pushes still run lint, typecheck and the tests. (#106, #111)
+
 ## 0.19.28
 
 ### ⚡ Performance
