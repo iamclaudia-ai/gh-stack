@@ -822,13 +822,23 @@ export async function remoteHeads(): Promise<Map<string, string>> {
 }
 
 /**
- * Check if a branch exists on the remote.
+ * Whether origin has `branch`: "unknown" when origin couldn't be asked
+ * (offline, bad credentials). `ls-remote --exit-code` exits 2 only for "no
+ * matching ref"; an unreachable remote exits 128.
  */
-export async function remoteBranchExists(branch: string): Promise<boolean> {
+export async function remoteBranchState(branch: string): Promise<"present" | "absent" | "unknown"> {
   const { exitCode } = await $`git ls-remote --exit-code --heads origin ${branch}`
     .nothrow()
     .quiet();
-  return exitCode === 0;
+  if (exitCode === 0) return "present";
+  return exitCode === 2 ? "absent" : "unknown";
+}
+
+/**
+ * Check if a branch exists on the remote (false when origin can't be asked).
+ */
+export async function remoteBranchExists(branch: string): Promise<boolean> {
+  return (await remoteBranchState(branch)) === "present";
 }
 
 /**

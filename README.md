@@ -273,6 +273,8 @@ gh-stack delete [<branch>] [-k|--keep-branch] [--no-remote]
 
 Removes a branch from its stack, re-parents its children, and deletes the local branch and its copy on GitHub (through the API, so no pre-push hook runs). Deleting a root with several children makes each child its own stack; deleting the last branch archives the stack. With no branch it opens a picker.
 
+Before deleting the copy on GitHub, it moves the children's PRs onto the new parent, because GitHub closes a PR whose base branch is deleted. If an open PR still targets the branch (a retarget failed, or it isn't a child in the stack), the copy on GitHub is kept and the PR named. The children aren't rebased: they keep the deleted branch's commits, and so do their PRs. If GitHub already deleted the branch, the leftover `origin/<branch>` tracking ref goes instead.
+
 - `-k, --keep-branch`: remove it from the stack only, like `untrack`
 - `--no-remote`: delete the local branch but keep the remote one
 

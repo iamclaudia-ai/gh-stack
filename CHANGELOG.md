@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-Nothing here changes how gh-stack behaves, so it ships with the next fix (rename this heading to the version then).
+### 🐛 Fixes
+- **`gh-stack delete` moves the children's PRs before deleting the branch on GitHub.** GitHub closes a PR whose base branch is deleted, and won't reopen it once its head is pushed again, so deleting a middle branch closed the next PR up. Now each child's PR is retargeted to the new parent first, and if an open PR still targets the branch afterwards (a failed retarget, or a PR from outside the stack), the branch stays on GitHub and the PR is named, as `merge -d` does. The children keep the deleted branch's commits, as before, so their PRs now list them. (#112)
+- **`gh-stack delete` drops a leftover `origin/<branch>` when GitHub already deleted the branch**, instead of leaving it until the next `git fetch --prune`. Deleting a branch whose local copy is already gone works too, instead of refusing with "Invalid stack metadata". (#114)
 
 ### 🧪 Tests
 - **Retries don't wait in the tests.** Every wait between retries goes through one helper, which the test suite sets to 0 ms; the number of attempts doesn't change. Real sleeps across the suite went from 42.8s to 4.3s, and the files that slept run in half the time alone. (#108, #115)

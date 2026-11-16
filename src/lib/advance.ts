@@ -356,6 +356,31 @@ export async function advancePastMerged(opts: {
 }
 
 /**
+ * True, after saying so, when `branch` must stay on GitHub: an open PR still
+ * targets it, or GitHub couldn't be asked. Deleting a PR's base branch makes
+ * GitHub close the PR, and it won't reopen once its head is pushed again
+ * (#100). Used by `merge -d` and `delete` (#112).
+ */
+export async function keptWhileTargeted(branch: string): Promise<boolean> {
+  const targeting = await openPrsTargeting(branch);
+  const later = `delete it with ${pc.green(`git push origin --delete ${branch}`)}`;
+  if (targeting === null) {
+    p.log.warn(
+      `Kept ${pc.yellow(branch)}: couldn't ask GitHub whether a PR still targets it. Once none does, ${later}`,
+    );
+    return true;
+  }
+  if (targeting.length > 0) {
+    const prs = targeting.map((n) => `#${n}`).join(", ");
+    p.log.warn(
+      `Kept ${pc.yellow(branch)}: PR ${prs} still ${targeting.length === 1 ? "targets" : "target"} it. Once ${targeting.length === 1 ? "it moves" : "they move"}, ${later}`,
+    );
+    return true;
+  }
+  return false;
+}
+
+/**
  * `merge -d`: delete the merged branches, on GitHub and locally, once no open
  * PR targets them (#100).
  *
@@ -370,21 +395,7 @@ export async function advancePastMerged(opts: {
 export async function deleteMergedBranches(branches: string[]): Promise<void> {
   const current = await git.currentBranch().catch(() => "");
   for (const branch of new Set(branches)) {
-    const targeting = await openPrsTargeting(branch);
-    const later = `delete it with ${pc.green(`git push origin --delete ${branch}`)}`;
-    if (targeting === null) {
-      p.log.warn(
-        `Kept ${pc.yellow(branch)}: couldn't ask GitHub whether a PR still targets it. Once none does, ${later}`,
-      );
-      continue;
-    }
-    if (targeting.length > 0) {
-      const prs = targeting.map((n) => `#${n}`).join(", ");
-      p.log.warn(
-        `Kept ${pc.yellow(branch)}: PR ${prs} still ${targeting.length === 1 ? "targets" : "target"} it. Once ${targeting.length === 1 ? "it moves" : "they move"}, ${later}`,
-      );
-      continue;
-    }
+    if (await keptWhileTargeted(branch)) continue;
 
     const where: string[] = [];
     if (await git.remoteBranchExists(branch)) {
