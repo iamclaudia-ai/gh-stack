@@ -67,7 +67,8 @@ describe("waits in src", () => {
       if (file === path.join("lib", "retry-delay.ts")) continue;
       const lines = (await Bun.file(path.join(root, file)).text()).split("\n");
       lines.forEach((line, i) => {
-        if (/Bun\.sleep\(|setTimeout\(/.test(line))
+        // Any spelling: Bun.sleep, sleepSync, `import { sleep } from "bun"`.
+        if (/\bsleep[A-Za-z]*\(|\bset(Timeout|Interval)\(/.test(line))
           offenders.push(`${file}:${i + 1}: ${line.trim()}`);
       });
     }

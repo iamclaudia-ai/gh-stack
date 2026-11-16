@@ -15,7 +15,7 @@
 // variables by prefix, so it applies only when set by this exact name.
 //
 // Every wait in src goes through retryWait; retry-delay.test.ts fails on a
-// `Bun.sleep` or `setTimeout` anywhere else.
+// `sleep`, `sleepSync`, `setTimeout` or `setInterval` call anywhere else.
 
 export const TEST_RETRY_DELAY_ENV = "GH_STACK_TEST_RETRY_DELAY_MS";
 
