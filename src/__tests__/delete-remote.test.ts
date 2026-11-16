@@ -302,7 +302,8 @@ describe("gh-stack delete, a name that's a suffix of another remote branch", () 
     await createBranch(tmpDir, "mid", "main");
     await makeCommit(tmpDir, "solo.txt", "solo\n", "mid: commit");
     await $`git -C ${tmpDir} checkout -q main`.quiet();
-    // Never pushed, but a tracking ref was left behind (a pushed-then-deleted name).
+    // Origin has no mid, but a tracking ref lingers (as after GitHub deleted it):
+    // dropping it shows delete got "absent", not just "no calls made".
     await $`git -C ${tmpDir} update-ref refs/remotes/origin/mid mid`.quiet();
     await writeMetadata(tmpDir, {
       version: 2,
