@@ -7,13 +7,19 @@ import * as fs from "node:fs/promises";
 import * as git from "../git.ts";
 import { getBranchMembership, setBranchMembership } from "../branch-config.ts";
 import { cleanup, createTempRepo, makeCommit } from "../../__tests__/helpers.ts";
+import { TEST_RETRY_DELAY_ENV } from "../retry-delay.ts";
 
 let tmpDir: string;
 let originalCwd: string;
 let indexLock: string;
 
-// Short waits keep the suite fast: 50+100+200+400+800 ms ≈ 1.5 s in all.
+// These tests release locks after a real delay (250 ms, 1.5 s), so they need
+// real waits: the preload's zero-wait override is lifted for this file (#108).
+// FAST outlasts those holds: 50+100+200+400+800 ms ≈ 1.5 s in all.
 const FAST = [50, 100, 200, 400, 800];
+// For a lock that never frees, only the number of attempts matters.
+const GIVE_UP = [10, 10, 10, 10, 10];
+let savedRetryDelay: string | undefined;
 
 beforeEach(async () => {
   tmpDir = await createTempRepo();
@@ -21,10 +27,13 @@ beforeEach(async () => {
   originalCwd = process.cwd();
   process.chdir(tmpDir);
   git.setLockRetryDelays(FAST);
+  savedRetryDelay = process.env[TEST_RETRY_DELAY_ENV];
+  delete process.env[TEST_RETRY_DELAY_ENV];
 });
 
 afterEach(async () => {
   git.setLockRetryDelays(null);
+  if (savedRetryDelay !== undefined) process.env[TEST_RETRY_DELAY_ENV] = savedRetryDelay;
   process.chdir(originalCwd);
   await cleanup(tmpDir);
 });
@@ -81,13 +90,14 @@ describe("checkout", () => {
   });
 
   test("a lock that never frees is a GitLockError, and nothing moved", async () => {
+    git.setLockRetryDelays(GIVE_UP);
     await $`git branch side`.quiet();
     await Bun.write(indexLock, "");
     const err = await git.checkout("side").catch((e) => e);
     expect(err).toBeInstanceOf(git.GitLockError);
     expect(err.lockPath).toEndWith("index.lock");
     expect(err.rebaseInProgress).toBe(false);
-    expect(err.waitedMs).toBe(FAST.reduce((a, b) => a + b));
+    expect(err.waitedMs).toBe(GIVE_UP.reduce((a, b) => a + b));
     expect(await git.currentBranch()).toBe("main");
   });
 
@@ -136,6 +146,7 @@ describe("rebase", () => {
   });
 
   test("a lock that never frees midway: paused, not reported as a conflict", async () => {
+    git.setLockRetryDelays(GIVE_UP);
     await divergedFeature();
     await $`git checkout -q feature`.quiet();
     const err = await git.runRebase(["rebase", "-x", `touch ${indexLock}`, "main"]).catch((e) => e);
@@ -182,6 +193,7 @@ describe("isCleanWorkingTree", () => {
   });
 
   test("a lock that never frees surfaces instead of reading as dirty", async () => {
+    git.setLockRetryDelays(GIVE_UP);
     await staleStat();
     await Bun.write(indexLock, "");
     await expect(git.isCleanWorkingTree()).rejects.toBeInstanceOf(git.GitLockError);
@@ -238,6 +250,7 @@ describe("lock holder", () => {
   });
 
   test("giving up on a stale lock: logged, and the error says nobody holds it", async () => {
+    git.setLockRetryDelays(GIVE_UP);
     await $`git branch side`.quiet();
     await Bun.write(indexLock, "");
     const err = await git.checkout("side").catch((e) => e);
@@ -248,6 +261,7 @@ describe("lock holder", () => {
   });
 
   test("giving up on a held lock names the holder", async () => {
+    git.setLockRetryDelays(GIVE_UP);
     await $`git branch side`.quiet();
     const holder = await holdOpen(indexLock);
     try {

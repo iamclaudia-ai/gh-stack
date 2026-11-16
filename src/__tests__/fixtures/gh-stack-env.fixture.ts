@@ -4,6 +4,9 @@
 // discovery (no .test. in the name).
 import { expect, test } from "bun:test";
 
+// The one GH_STACK_* variable left is the preload's own zero-wait override
+// (#108), with the preload's value, not the caller's.
 test("fixture: no GH_STACK_* variable reaches the tests", () => {
-  expect(Object.keys(process.env).filter((name) => name.startsWith("GH_STACK_"))).toEqual([]);
+  const vars = Object.entries(process.env).filter(([name]) => name.startsWith("GH_STACK_"));
+  expect(Object.fromEntries(vars)).toEqual({ GH_STACK_TEST_RETRY_DELAY_MS: "0" });
 });

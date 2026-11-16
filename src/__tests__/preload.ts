@@ -86,6 +86,13 @@ for (const name of Object.keys(process.env)) {
   if (name.startsWith("GH_STACK_")) delete process.env[name];
 }
 
+// Retries don't wait (#108): every retry wait is 0 ms, in-process and in the
+// CLIs tests spawn (they inherit process.env). The tests exercise lock, gh and
+// trunk-fetch retries on purpose, which slept ~40s in all. The number of
+// attempts doesn't change. A test that times a real wait (a lock released
+// after 250 ms) deletes it. Set after the scrub above, which would remove it.
+process.env.GH_STACK_TEST_RETRY_DELAY_MS = "0";
+
 // No test reaches the real `gh` (#86). Commands run in-process (sync, merge,
 // restack in temp repos) and CLIs spawned without a stub of their own find this
 // fake first on PATH. It gives the answer the real gh gives in a temp repo:

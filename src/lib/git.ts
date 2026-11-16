@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { appendFile, mkdir, realpath, stat } from "node:fs/promises";
 import pc from "picocolors";
 import { type LandedCopy, landedCopy } from "./landed-copies.ts";
+import { retryWait } from "./retry-delay.ts";
 
 export const STACK_SYNC_TAG_PREFIX = "stack-sync-base";
 export const STACK_SYNC_TAG_GLOB = `${STACK_SYNC_TAG_PREFIX}-*`;
@@ -279,8 +280,7 @@ async function retryLocks(
       announced = true;
       episode = startLockEpisode(lock, args);
     }
-    await Bun.sleep(delay);
-    waitedMs += delay;
+    waitedMs += await retryWait(delay);
     retry = next;
   }
 }
