@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### 🐛 Fixes
+- **gh-stack no longer mistakes another branch on origin for the one it's asking about.** The check asked `git ls-remote` for the bare name, which matches any branch ending in it, so `mid` was found through origin's `feat/mid`. `delete mid` then tried to delete a `mid` that was never on GitHub and warned that it couldn't, and kept a stale `origin/mid` it should have dropped. `merge -d` and `join` used the same check. Now it asks for `refs/heads/<branch>`, which matches only that branch. (#118, #120)
+- **When `merge -d` or `delete` keeps a branch because a PR still targets it, the suggested command skips the pre-push hook**: `git push --no-verify origin --delete <branch>`. The old suggestion ran the hook, which in many repos is a full lint and test run. (#119, #120)
+
 ## 0.19.30
 
 ### 🐛 Fixes

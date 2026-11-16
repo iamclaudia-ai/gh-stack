@@ -573,6 +573,15 @@ describe("remote branch detection", () => {
     expect(await git.remoteBranchExists("nonexistent")).toBe(false);
   });
 
+  test("remoteBranchState matches the whole branch name, not a suffix (#118)", async () => {
+    await createLinearStack(tmpDir);
+    await $`git -C ${tmpDir} push -q --no-verify origin pr1:refs/heads/feat/pr1`.quiet();
+
+    expect(await git.remoteBranchState("feat/pr1")).toBe("present");
+    // Never pushed under its own name; a bare `pr1` pattern would match feat/pr1.
+    expect(await git.remoteBranchState("pr1")).toBe("absent");
+  });
+
   test("force push with lease succeeds after rebase", async () => {
     await createLinearStack(tmpDir);
     await pushAllBranches(tmpDir);

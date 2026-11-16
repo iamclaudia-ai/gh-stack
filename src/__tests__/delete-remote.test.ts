@@ -295,6 +295,45 @@ describe("gh-stack delete, stale tracking ref", () => {
   });
 });
 
+// #118: `ls-remote origin mid` is a pattern that matched refs/heads/feat/mid,
+// so a branch origin never had was taken for present.
+describe("gh-stack delete, a name that's a suffix of another remote branch", () => {
+  test("`mid` isn't found through origin's feat/mid", async () => {
+    await createBranch(tmpDir, "mid", "main");
+    await makeCommit(tmpDir, "solo.txt", "solo\n", "mid: commit");
+    await $`git -C ${tmpDir} checkout -q main`.quiet();
+    // Origin has no mid, but a tracking ref lingers (as after GitHub deleted it):
+    // dropping it shows delete got "absent", not just "no calls made".
+    await $`git -C ${tmpDir} update-ref refs/remotes/origin/mid mid`.quiet();
+    await writeMetadata(tmpDir, {
+      version: 2,
+      current_stack: "deps",
+      stacks: {
+        deps: DEPS,
+        solo: {
+          description: "",
+          last_branch: "mid",
+          base: "main",
+          branches: { mid: { parent: "main" } },
+        },
+      },
+    });
+    expect((await runCli(["doctor"])).exitCode).toBe(0);
+
+    const res = await runCli(["delete", "mid", "--yes"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(res.out).toContain("Dropped stale tracking ref origin/mid");
+    expect(res.out).not.toContain("remote branch origin/mid");
+    expect(await ghCalls()).toEqual([]);
+    expect(await refExists(tmpDir, "refs/remotes/origin/mid")).toBe(false);
+    expect(await refExists(tmpDir, "refs/heads/mid")).toBe(false);
+    // feat/mid is untouched on both sides.
+    expect(await refExists(remoteDir, "refs/heads/feat/mid")).toBe(true);
+    expect(await refExists(tmpDir, "refs/remotes/origin/feat/mid")).toBe(true);
+  });
+});
+
 describe("gh-stack delete, when GitHub or origin can't be asked", () => {
   test("an unreachable origin isn't taken for a deleted branch", async () => {
     // ls-remote exits 128 here (unreachable), not 2 (no such branch).
