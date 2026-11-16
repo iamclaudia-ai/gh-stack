@@ -7,8 +7,9 @@ unset $(git rev-parse --local-env-vars)
 # Skip the checks when the push carries no branch update (#106): every ref git
 # sends on stdin (`<local ref> <local sha> <remote ref> <remote sha>`) is a
 # deletion (local sha all zeros, in any hash length) or lands under refs/tags/.
-# A tag points at a commit whose push already ran the checks, and publish.yml
-# runs them again on the tag. Empty input still runs them.
+# A tag usually points at a commit whose push already ran the checks, and
+# publish.yml runs them on the tag before publishing. Empty input still runs
+# them.
 refs=0
 branch_update=0
 while read -r local_ref local_sha remote_ref _; do
