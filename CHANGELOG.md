@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.19.28
+
+### ⚡ Performance
+- **One gh-stack run asks git far fewer questions.** A run kept asking git the same things: which branch is checked out, where each branch points, whether it exists, every branch's gh-stack config, the git dir. In the restack and resume tests, a run averaged 64 git calls, more than half of them repeats. gh-stack now caches those answers for the run, and each write drops only the answers it can change: a config write keeps branch tips, a rebase keeps gh-stack config, anything unrecognized drops everything, and so does every prompt. Those runs now make 40 git calls (−37%), and the whole test suite spawns 13% fewer git processes. `merge`, `sync` and `join` also wait out a held git lock when they fetch or pull, like their other git writes. (#108, #110)
+
+### 🧪 Tests
+- **`bun run test` runs the test files in parallel**, 8 at a time: ~1 minute instead of ~6 (`bun run check` and the pre-push hook use it). Bare `bun test` still runs them one at a time. (#108, #109)
+
 ## 0.19.27
 
 ### 🐛 Fixes
