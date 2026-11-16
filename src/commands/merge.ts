@@ -34,6 +34,7 @@ import { confirmAction, isAutoYes } from "../lib/ui.ts";
 import { guardRemoteContent } from "../lib/remote-guard.ts";
 import { ensureNoPendingRun } from "./restack.ts";
 import { stripSeqSuffix } from "./update-prs.ts";
+import { retryDelay, retryWait } from "../lib/retry-delay.ts";
 import {
   planMerges,
   advancePastMerged,
@@ -146,11 +147,11 @@ async function squashMergeWithRetry(
 
     // Heads match — genuine recompute window. Back off and re-poll; if it
     // settles non-mergeable instead, it was a real conflict after all.
-    const delay = MERGE_RETRY_BACKOFF_MS[attempt - 1]!;
+    const delay = retryDelay(MERGE_RETRY_BACKOFF_MS[attempt - 1]!);
     s.message(
       `PR #${prNumber}: GitHub still recomputing mergeability — retrying in ${delay / 1000}s (${attempt}/${maxAttempts - 1})...`,
     );
-    await Bun.sleep(delay);
+    await retryWait(delay);
     const ready = await waitForMergeable(prNumber, s);
     if (!ready) return { ok: false, stderr: stderr.trim(), genuine: true };
   }
@@ -172,7 +173,7 @@ async function waitForHeadSync(
     if (state?.headRefOid === liveSha) return true;
     if (state?.state === "MERGED") return true;
     spinner.message(`Waiting for PR #${prNumber} head to sync... (${attempt}/${MAX_RETRIES})`);
-    await Bun.sleep(RETRY_DELAY_MS);
+    await retryWait(RETRY_DELAY_MS);
   }
   return false;
 }
@@ -252,7 +253,7 @@ async function waitForMergeable(
     if (verdict === "conflict" || verdict === "closed") return false; // waiting won't help
 
     spinner.message(`Waiting for PR #${prNumber} to be ready... (${attempt}/${MAX_RETRIES})`);
-    await Bun.sleep(RETRY_DELAY_MS);
+    await retryWait(RETRY_DELAY_MS);
   }
   return false;
 }
@@ -277,7 +278,7 @@ async function pollMergeVerdict(
     if (verdict !== "pending") return verdict;
 
     spinner.message(`Checking PR #${prNumber} mergeability... (${attempt}/${MAX_RETRIES})`);
-    await Bun.sleep(RETRY_DELAY_MS);
+    await retryWait(RETRY_DELAY_MS);
   }
   return "pending";
 }
@@ -1109,7 +1110,7 @@ async function fetchTrunkWithMerge(
       return { ok: true, mergeCommit };
     }
     if (attempt >= TRUNK_MERGE_WAIT_MS.length) return { ok: false, mergeCommit };
-    await Bun.sleep(TRUNK_MERGE_WAIT_MS[attempt]!);
+    await retryWait(TRUNK_MERGE_WAIT_MS[attempt]!);
   }
 }
 

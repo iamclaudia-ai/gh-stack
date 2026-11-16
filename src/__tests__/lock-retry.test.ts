@@ -17,7 +17,7 @@ import {
   setupRemote,
 } from "./helpers.ts";
 
-// Builds repos and spawns the CLI; the lock that never frees costs ~5 s of retries.
+// Builds repos and spawns the CLI several times.
 setDefaultTimeout(60_000);
 
 let tmpDir: string;
@@ -37,10 +37,19 @@ afterEach(async () => {
 
 const cliPath = new URL("../index.ts", import.meta.url).pathname;
 
-/** Run the CLI; `onStderr` sees all stderr so far each time more arrives. */
-async function runCli(args: string[], onStderr?: (stderrSoFar: string) => void) {
+/**
+ * Run the CLI; `onStderr` sees all stderr so far each time more arrives.
+ * `realWaits` lifts the preload's zero-wait override (#108), for a test that
+ * frees the lock while the CLI waits.
+ */
+async function runCli(
+  args: string[],
+  onStderr?: (stderrSoFar: string) => void,
+  { realWaits = false } = {},
+) {
   const base = { ...process.env } as Record<string, string>;
   delete base.GH_STACK_NO_PUSH;
+  if (realWaits) delete base.GH_STACK_TEST_RETRY_DELAY_MS;
   const proc = Bun.spawn(["bun", "run", cliPath, ...args], {
     cwd: tmpDir,
     env: {
@@ -119,11 +128,15 @@ describe("restack with index.lock briefly held (#69)", () => {
     // fixed time after it appeared raced under load: when gh-stack's next
     // locking step came later than that, it never had to wait.
     let freed = false;
-    const { exitCode, out } = await runCli(["restack"], (stderr) => {
-      if (freed || !stderr.includes("index.lock; waiting for it to finish")) return;
-      freed = true;
-      void fs.rm(lock, { force: true });
-    });
+    const { exitCode, out } = await runCli(
+      ["restack"],
+      (stderr) => {
+        if (freed || !stderr.includes("index.lock; waiting for it to finish")) return;
+        freed = true;
+        void fs.rm(lock, { force: true });
+      },
+      { realWaits: true },
+    );
 
     expect(out).toContain("index.lock; waiting for it to finish");
     expect(out).not.toContain("Rebase Conflict");
@@ -140,7 +153,9 @@ describe("restack with index.lock briefly held (#69)", () => {
 
     expect(stopped.exitCode).toBe(1);
     expect(stopped.out).toContain("another git process holds");
-    expect(stopped.out).toContain("index.lock, and still did after waiting 5.1s");
+    // It gave up without waiting: the preload's zero-wait override reached the
+    // CLI (#108). Real runs wait 5.1s here.
+    expect(stopped.out).toContain("index.lock, and still did after waiting 0.0s");
     expect(stopped.out).toContain("gh-stack restack --resume");
     expect(stopped.out).not.toContain("Rebase Conflict");
     expect(stopped.out).not.toContain("ShellError");

@@ -77,6 +77,14 @@ files one at a time (~6 min), and bunfig.toml has no setting for `--parallel`.
 and with 16 workers they contend in the kernel. Run a single file with
 `bun test <path>` as usual.
 
+Retries don't wait in tests (#108). Every wait between attempts (lock retries,
+`gh` retries, merge polling) goes through `retryWait` in `src/lib/retry-delay.ts`,
+which waits `GH_STACK_TEST_RETRY_DELAY_MS` instead when that's set. The test
+preload sets it to 0, and CLIs the tests spawn inherit it, so retries still
+happen, just without the wait. `retry-delay.test.ts` fails on a `Bun.sleep` or
+`setTimeout` anywhere else in src. A test that times a real wait (a lock released
+after 250 ms) deletes the variable, as `git-lock.test.ts` does.
+
 ## Release Process
 
 When making changes, follow these steps:

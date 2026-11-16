@@ -1,6 +1,7 @@
 // GitHub CLI (gh) helpers
 import { $ } from "bun";
 import type { PrInfo, PrStatus } from "../types.ts";
+import { retryWait } from "./retry-delay.ts";
 
 let cachedNwo: string | null | undefined; // undefined = not yet looked up
 
@@ -105,7 +106,7 @@ export async function ghPrViewJson(prNumber: number, fields: string): Promise<an
   for (let attempt = 0; attempt <= delays.length; attempt++) {
     if (attempt > 0) {
       // Jitter, so concurrent callers that collided don't collide again.
-      await Bun.sleep(delays[attempt - 1]! + Math.floor(Math.random() * 200));
+      await retryWait(delays[attempt - 1]! + Math.floor(Math.random() * 200));
     }
     const { exitCode, stdout, stderr } = await $`gh pr view ${prNumber} --json ${fields}`
       .quiet()
@@ -276,7 +277,7 @@ export async function setPrBase(prNumber: number, base: string): Promise<GhResul
     if (r.exitCode === 0) return { ok: true };
     const delay = RETARGET_BACKOFF_MS[attempt];
     if (delay === undefined) return { ok: false, error: ghError(r) };
-    await Bun.sleep(delay);
+    await retryWait(delay);
   }
 }
 
