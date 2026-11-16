@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+Nothing here changes how gh-stack behaves, so it ships with the next fix (rename this heading to the version then).
+
+### 🧪 Tests
+- **Retries don't wait in the tests.** Every wait between retries goes through one helper, which the test suite sets to 0 ms; the number of attempts doesn't change. Real sleeps across the suite went from 42.8s to 4.3s, and the files that slept run in half the time alone. (#108, #115)
+- **The two slowest test files are split into six, and the suite starts the slowest files first** (committed `test-timings.json`). On an idle 8-core machine the suite's floor drops from ~54s to ~40s; on CI and a busy Mac, where the run is limited by CPU, nothing changes. (#108, #116)
+
 ## 0.19.29
 
 ### 🐛 Fixes

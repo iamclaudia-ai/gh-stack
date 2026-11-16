@@ -108,7 +108,10 @@ When making changes, follow these steps:
 1. **Update docs** — Keep `README.md` in sync with any command/flag changes
 2. **Run tests** — `bun run test` (must pass before committing)
 3. **Commit** — Use conventional commits
-4. **Bump version** — Update `package.json` version + add entry to `CHANGELOG.md`
+4. **Bump version** — Update `package.json` version + add entry to `CHANGELOG.md`.
+   Merged changes that didn't warrant a release of their own (tests, repo
+   tooling) wait under `## Unreleased` at the top: rename that heading to the
+   new version and add the release's own entries to it.
 5. **Tag** — `git tag -a v0.x.y -m "Release v0.x.y — summary"`
 6. **Build** — `bun run build`
 7. **Push** — `git push && git push origin v0.x.y`
