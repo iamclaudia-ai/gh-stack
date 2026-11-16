@@ -77,6 +77,21 @@ files one at a time (~6 min), and bunfig.toml has no setting for `--parallel`.
 and with 16 workers they contend in the kernel. Run a single file with
 `bun test <path>` as usual.
 
+`bun run test` passes `--timings=test-timings.json`, so the parallel run starts
+the slowest files first. Without it, Bun hands files out in discovery order, and
+a 24s file that starts late stretches the run. Bun treats a file the timings
+file doesn't list as average, so a new test file needs no entry; refresh it with
+`bun run test:timings` (serial, ~5 min: parallel per-file times are inflated by
+contention and skew the order) when files have been added or split. The refresh
+merges, so a deleted or renamed file's entry stays until removed by hand.
+
+With 8 workers, a file that runs alone for longer than an eighth of the serial
+total (~40s of ~315s in Nov 2026) sets the minimum wall time; collapse-guard and
+resume-run did (#108). Split such a file along its `describe` blocks, with the
+shared fixtures in a `*-helpers.ts` beside it (see `collapse-guard-helpers.ts`:
+the fixture dirs are exported `let`s, set by hooks that a `use…Repos()` call
+registers in each file).
+
 Retries don't wait in tests (#108). Every wait between attempts (lock retries,
 `gh` retries, merge polling) goes through `retryWait` in `src/lib/retry-delay.ts`,
 which waits `GH_STACK_TEST_RETRY_DELAY_MS` instead when that's set. The test
