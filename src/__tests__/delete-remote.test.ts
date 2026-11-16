@@ -199,6 +199,8 @@ describe("gh-stack delete, the children's PRs", () => {
       "child is still built on feat/mid's commits, so its PR lists them now",
     );
     expect(await prBase(143)).toBe("parent");
+    // Recorded, so restack and submit don't repeat the edit.
+    expect((await readMetadata(tmpDir)).stacks["deps"]!.branches["child"]!.prBase).toBe("parent");
     const calls = await ghCalls();
     const edit = calls.indexOf("pr edit 143 --base parent");
     const del = calls.indexOf("api --method DELETE repos/{owner}/{repo}/git/refs/heads/feat/mid");
@@ -223,7 +225,10 @@ describe("gh-stack delete, the children's PRs", () => {
     expect(await refExists(tmpDir, "refs/remotes/origin/feat/mid")).toBe(true);
     // The local branch and the metadata still go: the PR only needs origin's copy.
     expect(await refExists(tmpDir, "refs/heads/feat/mid")).toBe(false);
-    expect((await readMetadata(tmpDir)).stacks["deps"]!.branches["child"]!.parent).toBe("parent");
+    const child = (await readMetadata(tmpDir)).stacks["deps"]!.branches["child"]!;
+    expect(child.parent).toBe("parent");
+    // Not recorded as moved, so the next submit retries the retarget.
+    expect(child.prBase).toBeUndefined();
   });
 
   test("another open PR on the branch keeps origin's copy, and isn't moved", async () => {

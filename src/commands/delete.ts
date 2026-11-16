@@ -4,11 +4,13 @@ import * as p from "../lib/output.ts";
 import pc from "picocolors";
 import {
   archiveStack,
+  findStackForBranch,
   getChildren,
   removeBranchFromStack,
   stackBase,
   writeMetadata,
 } from "../lib/metadata.ts";
+import type { StackMetadata } from "../types.ts";
 import {
   ensureMetadata,
   ensureCurrentStack,
@@ -225,7 +227,7 @@ OPTIONS
   }
 
   // Delete the actual git branch(es)
-  if (hasRemote) await deleteRemoteBranch(branchName, branch.parent, childPrs);
+  if (hasRemote) await deleteRemoteBranch(meta, branchName, branch.parent, childPrs);
   if (staleTracking) {
     await git.runGit(["update-ref", "-d", trackingRef]);
     p.log.success(`Dropped stale tracking ref ${pc.dim(`origin/${branchName}`)}`);
@@ -259,6 +261,7 @@ OPTIONS
  * keeps them too), so their PRs now list those commits.
  */
 async function deleteRemoteBranch(
+  meta: StackMetadata,
   branchName: string,
   newParent: string,
   childPrs: { child: string; pr: number }[],
@@ -274,6 +277,14 @@ async function deleteRemoteBranch(
     }
   }
   if (moved.length > 0) {
+    // Record the base, as merge and join do, so restack and submit don't
+    // repeat the edit. A failed retarget keeps the old prBase: they retry it.
+    for (const child of moved) {
+      const name = findStackForBranch(meta, child);
+      const entry = name ? meta.stacks[name]?.branches[child] : undefined;
+      if (entry) entry.prBase = newParent;
+    }
+    await writeMetadata(meta);
     p.log.info(
       pc.dim(
         moved.length === 1
