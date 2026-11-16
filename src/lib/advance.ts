@@ -359,11 +359,12 @@ export async function advancePastMerged(opts: {
  * True, after saying so, when `branch` must stay on GitHub: an open PR still
  * targets it, or GitHub couldn't be asked. Deleting a PR's base branch makes
  * GitHub close the PR, and it won't reopen once its head is pushed again
- * (#100). Used by `merge -d` and `delete` (#112).
+ * (#100). Used by `merge -d` and `delete` (#112). The advice skips the
+ * pre-push hook, often a full test run, as gh-stack's own delete does (#119).
  */
 export async function keptWhileTargeted(branch: string): Promise<boolean> {
   const targeting = await openPrsTargeting(branch);
-  const later = `delete it with ${pc.green(`git push origin --delete ${branch}`)}`;
+  const later = `delete it with ${pc.green(`git push --no-verify origin --delete ${branch}`)}`;
   if (targeting === null) {
     p.log.warn(
       `Kept ${pc.yellow(branch)}: couldn't ask GitHub whether a PR still targets it. Once none does, ${later}`,

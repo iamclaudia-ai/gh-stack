@@ -824,10 +824,11 @@ export async function remoteHeads(): Promise<Map<string, string>> {
 /**
  * Whether origin has `branch`: "unknown" when origin couldn't be asked
  * (offline, bad credentials). `ls-remote --exit-code` exits 2 only for "no
- * matching ref"; an unreachable remote exits 128.
+ * matching ref"; an unreachable remote exits 128. The full ref name matters:
+ * a bare `mid` is a pattern that also matches `refs/heads/feat/mid` (#118).
  */
 export async function remoteBranchState(branch: string): Promise<"present" | "absent" | "unknown"> {
-  const { exitCode } = await $`git ls-remote --exit-code --heads origin ${branch}`
+  const { exitCode } = await $`git ls-remote --exit-code --heads origin refs/heads/${branch}`
     .nothrow()
     .quiet();
   if (exitCode === 0) return "present";

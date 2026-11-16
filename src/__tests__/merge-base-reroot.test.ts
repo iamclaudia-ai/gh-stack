@@ -280,7 +280,7 @@ describe("merge --base -d deletes the merged branch only once no PR targets it (
       "Could not retarget PR #2 (GraphQL: Something went wrong (updatePullRequest))",
     );
     expect(res.out).toContain("Kept pr1: PR #2 still targets it.");
-    expect(res.out).toContain("git push origin --delete pr1");
+    expect(res.out).toContain("delete it with git push --no-verify origin --delete pr1");
     const calls = await ghCalls();
     // Three tries before giving up.
     expect(calls.filter((c) => c === "pr edit 2 --base main").length).toBeGreaterThanOrEqual(3);
