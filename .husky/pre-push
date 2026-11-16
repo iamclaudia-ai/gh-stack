@@ -1,7 +1,27 @@
 # Git exports repo-locating variables (GIT_DIR, GIT_INDEX_FILE, ...) to hooks.
 # From a linked worktree GIT_DIR is absolute, so any git spawned by the checks
 # would act on this repository. Clear them first (see src/__tests__/preload.ts).
+# shellcheck disable=SC2046 # one variable name per word, split on purpose
 unset $(git rev-parse --local-env-vars)
+
+# Skip the checks when the push carries no branch update (#106): every ref git
+# sends on stdin (`<local ref> <local sha> <remote ref> <remote sha>`) is a
+# deletion (local sha all zeros, in any hash length) or lands under refs/tags/.
+# A tag points at a commit whose push already ran the checks, and publish.yml
+# runs them again on the tag. Empty input still runs them.
+refs=0
+branch_update=0
+while read -r local_ref local_sha remote_ref _; do
+  [ -n "$local_ref" ] || continue
+  refs=1
+  case $local_sha in *[!0]*) ;; *) continue ;; esac
+  case $remote_ref in refs/tags/*) continue ;; esac
+  branch_update=1
+done
+if [ "$refs" = 1 ] && [ "$branch_update" = 0 ]; then
+  echo "pre-push: only deletions and tags, skipping the checks" >&2
+  exit 0
+fi
 
 # husky runs hooks with `sh -e`: test the status inside `if`, or a failing
 # check exits the hook before its output is printed.

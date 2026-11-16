@@ -95,6 +95,8 @@ When making changes, follow these steps:
    to show a new version; wait rather than re-publishing.
 
 The pre-push hook runs lint + typecheck + tests (output suppressed on success).
+It skips them when the push only deletes branches or pushes tags (#106), so
+`git push origin vX` and `git push origin --delete <branch>` return at once.
 The prepublishOnly hook is a no-op since checks already ran on push.
 
 The repo and the npm package belong to `iamclaudia-ai` (moved from `kiliman`

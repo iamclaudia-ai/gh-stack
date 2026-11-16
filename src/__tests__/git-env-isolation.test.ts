@@ -146,6 +146,78 @@ describe("git env isolation", () => {
       await fs.rm(stubDir, { recursive: true, force: true });
     }
   });
+
+  // #106: a push that only deletes branches or pushes tags carries no new code,
+  // so the hook skips the checks. Git sends one line per ref on stdin:
+  // `<local ref> <local sha> <remote ref> <remote sha>`. The stub `bun` fails
+  // loudly, so a run of the checks shows up as exit 1 with its marker.
+  describe("pre-push skips pushes with no branch update", () => {
+    const zero = "0".repeat(40);
+    const a = "a".repeat(40);
+    const b = "b".repeat(40);
+    const line = (localRef: string, localSha: string, remoteRef: string, remoteSha: string) =>
+      `${localRef} ${localSha} ${remoteRef} ${remoteSha}\n`;
+
+    async function runHook(stdin: string) {
+      const stubDir = await fs.mkdtemp(path.join(await fs.realpath("/tmp"), "gh-stack-stub-"));
+      try {
+        await Bun.write(path.join(stubDir, "bun"), '#!/bin/sh\necho "STUB CHECKS RAN"\nexit 1\n');
+        await fs.chmod(path.join(stubDir, "bun"), 0o755);
+        const proc = Bun.spawn(["sh", "-e", path.join(repoRoot, ".husky/pre-push")], {
+          cwd: repoRoot,
+          env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}` },
+          stdin: new TextEncoder().encode(stdin),
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const output =
+          (await new Response(proc.stdout).text()) + (await new Response(proc.stderr).text());
+        return { exitCode: await proc.exited, ran: output.includes("STUB CHECKS RAN"), output };
+      } finally {
+        await fs.rm(stubDir, { recursive: true, force: true });
+      }
+    }
+
+    test.each([
+      ["a branch deletion", line("(delete)", zero, "refs/heads/old", a)],
+      [
+        "several branch deletions",
+        line("(delete)", zero, "refs/heads/one", a) + line("(delete)", zero, "refs/heads/two", b),
+      ],
+      ["a deletion in a SHA-256 repo", line("(delete)", "0".repeat(64), "refs/heads/old", a)],
+      ["a new tag", line("refs/tags/v1.2.3", a, "refs/tags/v1.2.3", zero)],
+      ["a tag pushed from HEAD", line("HEAD", a, "refs/tags/v1.2.3", zero)],
+      [
+        "tags mixed with deletions",
+        line("refs/tags/v1", a, "refs/tags/v1", zero) +
+          line("(delete)", zero, "refs/tags/v0", b) +
+          line("(delete)", zero, "refs/heads/old", b),
+      ],
+    ])("skips the checks for %s", async (_name, stdin) => {
+      const r = await runHook(stdin);
+      expect(r.ran).toBe(false);
+      expect(r.output).toContain("skipping the checks");
+      expect(r.exitCode).toBe(0);
+    });
+
+    test.each([
+      ["a branch update", line("refs/heads/feat", b, "refs/heads/feat", a)],
+      // remote sha all zeros: only the local sha marks a deletion.
+      ["a new branch", line("refs/heads/feat", a, "refs/heads/feat", zero)],
+      [
+        "a branch update pushed with a tag and a deletion",
+        line("refs/tags/v1", a, "refs/tags/v1", zero) +
+          line("(delete)", zero, "refs/heads/old", b) +
+          line("refs/heads/main", b, "refs/heads/main", a),
+      ],
+      // Nothing to classify: run the checks rather than guess.
+      ["empty input", ""],
+    ])("runs the checks for %s", async (_name, stdin) => {
+      const r = await runHook(stdin);
+      expect(r.ran).toBe(true);
+      expect(r.exitCode).toBe(1);
+    });
+  });
 });
 
 // #86: no test reaches the real gh. The preload puts a fake first on PATH, so
