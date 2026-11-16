@@ -18,7 +18,8 @@ import {
 import { takeSnapshot } from "../lib/snapshot.ts";
 import { selectBranch, confirmAction } from "../lib/ui.ts";
 import * as git from "../lib/git.ts";
-import { deleteBranchOnGitHub } from "../lib/github.ts";
+import { deleteBranchOnGitHub, setPrBase } from "../lib/github.ts";
+import { keptWhileTargeted } from "../lib/advance.ts";
 
 const UNTRACK_HELP = `
 gh-stack untrack — Stop tracking a branch; the branch and its PR stay
@@ -61,6 +62,12 @@ re-parenting any children to the removed branch's parent. If the deleted
 branch was pushed, its copy on GitHub is deleted too, through the API, so the
 repo's pre-push hook doesn't run.
 
+Before that, the children's PRs move onto the new parent: GitHub closes a PR
+whose base branch is deleted. If an open PR still targets the branch, its copy
+on GitHub is kept and the PR named. The children aren't rebased, so they (and
+their PRs) keep the deleted branch's commits. If GitHub already deleted the
+branch, the leftover origin/<branch> tracking ref goes instead.
+
 Deleting a stack's root that has several children leaves them side by side on
 the base, so each child (with the branches above it) becomes its own stack.
 Deleting a stack's last branch archives the empty stack
@@ -90,7 +97,8 @@ OPTIONS
   const stackName = positional[0]
     ? resolveStackForBranchArg(meta, positional[0]!)
     : ensureCurrentStack(meta);
-  await ensureValidStack(meta, stackName);
+  // The branch being deleted may be gone locally already: removing it is the fix.
+  await ensureValidStack(meta, stackName, { allowMissing: positional[0] ? [positional[0]] : [] });
   const stack = meta.stacks[stackName]!;
   // Detached HEAD is fine: `delete <branch>` doesn't need a current branch.
   const currentBranch = (await git.currentBranch().catch(() => null)) ?? undefined;
@@ -122,9 +130,19 @@ OPTIONS
   // Discover what actually exists in git so we report (and delete) accurately
   const hasLocal = !keepBranch && (await git.localBranchExists(branchName));
   const hasRemote = !keepBranch && !noRemote && (await git.remoteBranchExists(branchName));
+  const trackingRef = `refs/remotes/origin/${branchName}`;
+  // Origin may have lost the branch already (deleted on GitHub) while the
+  // tracking ref lingers until the next fetch --prune (#114).
+  const staleTracking =
+    !hasRemote && !keepBranch && !noRemote && (await git.refExists(trackingRef));
 
   // Show what will happen
   const children = getChildren(stack, branchName);
+  // Read before removeBranchFromStack, which can move children to new stacks.
+  const childPrs = children.flatMap((child) => {
+    const pr = stack.branches[child]?.pr;
+    return pr == null ? [] : [{ child, pr }];
+  });
   p.log.info(`Removing: ${pc.yellow(branchName)} from stack ${pc.blue(stackName)}`);
   p.log.info(`Parent was: ${pc.dim(branch.parent)}`);
 
@@ -150,8 +168,18 @@ OPTIONS
     p.log.info(pc.dim("Keeping git branch (--keep-branch) — stack metadata only"));
   } else {
     if (hasLocal) p.log.info(`Deleting local branch ${pc.yellow(branchName)}`);
-    if (hasRemote) p.log.info(`Deleting remote branch ${pc.yellow(`origin/${branchName}`)}`);
-    if (!hasLocal && !hasRemote) {
+    if (hasRemote) {
+      for (const { child, pr } of childPrs) {
+        p.log.info(`Moving PR #${pr} (${child}) onto ${pc.dim(branch.parent)} first`);
+      }
+      p.log.info(`Deleting remote branch ${pc.yellow(`origin/${branchName}`)}`);
+    }
+    if (staleTracking) {
+      p.log.info(
+        `Dropping ${pc.yellow(`origin/${branchName}`)}: GitHub no longer has it, only the local tracking ref is left`,
+      );
+    }
+    if (!hasLocal && !hasRemote && !staleTracking) {
       p.log.info(pc.dim("No git branch found to delete — stack metadata only"));
     }
   }
@@ -197,19 +225,10 @@ OPTIONS
   }
 
   // Delete the actual git branch(es)
-  // Through the API, as merge -d does (#107): a `git push --delete` would run
-  // the repo's pre-push hook, which can be a full test suite.
-  if (hasRemote) {
-    const deleted = await deleteBranchOnGitHub(branchName);
-    if (deleted.ok) {
-      // Like `git push --delete`, drop the remote-tracking ref too.
-      await git.runGit(["update-ref", "-d", `refs/remotes/origin/${branchName}`]);
-      p.log.success(`Deleted remote branch ${pc.dim(`origin/${branchName}`)}`);
-    } else {
-      p.log.warn(
-        `Could not delete remote branch ${pc.dim(`origin/${branchName}`)} on GitHub (${deleted.error}). Delete it manually.`,
-      );
-    }
+  if (hasRemote) await deleteRemoteBranch(branchName, branch.parent, childPrs);
+  if (staleTracking) {
+    await git.runGit(["update-ref", "-d", trackingRef]);
+    p.log.success(`Dropped stale tracking ref ${pc.dim(`origin/${branchName}`)}`);
   }
   if (hasLocal) {
     const ok = await git.deleteLocalBranch(branchName);
@@ -228,4 +247,54 @@ OPTIONS
     return;
   }
   p.outro(pc.green(`Removed ${pc.yellow(branchName)} from stack ${pc.blue(stackName)}`));
+}
+
+/**
+ * Delete origin's copy of `branchName`, after moving its children's PRs onto
+ * `newParent` (#112): GitHub closes a PR whose base branch is deleted, and
+ * won't reopen it once its head is pushed again. A PR that still targets the
+ * branch afterwards (a failed retarget, someone else's PR) keeps it alive.
+ *
+ * The children aren't rebased: they keep the deleted branch's commits (restack
+ * keeps them too), so their PRs now list those commits.
+ */
+async function deleteRemoteBranch(
+  branchName: string,
+  newParent: string,
+  childPrs: { child: string; pr: number }[],
+): Promise<void> {
+  const moved: string[] = [];
+  for (const { child, pr } of childPrs) {
+    const r = await setPrBase(pr, newParent);
+    if (r.ok) {
+      moved.push(child);
+      p.log.success(`PR #${pr} (${child}) base → ${pc.green(newParent)}`);
+    } else {
+      p.log.warn(`Could not retarget PR #${pr} (${child}) to ${newParent} (${r.error})`);
+    }
+  }
+  if (moved.length > 0) {
+    p.log.info(
+      pc.dim(
+        moved.length === 1
+          ? `${moved[0]} is still built on ${branchName}'s commits, so its PR lists them now`
+          : `${moved.join(", ")} are still built on ${branchName}'s commits, so their PRs list them now`,
+      ),
+    );
+  }
+
+  if (await keptWhileTargeted(branchName)) return;
+
+  // Through the API, as merge -d does (#107): a `git push --delete` would run
+  // the repo's pre-push hook, which can be a full test suite.
+  const deleted = await deleteBranchOnGitHub(branchName);
+  if (deleted.ok) {
+    // Like `git push --delete`, drop the remote-tracking ref too.
+    await git.runGit(["update-ref", "-d", `refs/remotes/origin/${branchName}`]);
+    p.log.success(`Deleted remote branch ${pc.dim(`origin/${branchName}`)}`);
+  } else {
+    p.log.warn(
+      `Could not delete remote branch ${pc.dim(`origin/${branchName}`)} on GitHub (${deleted.error}). Delete it manually.`,
+    );
+  }
 }

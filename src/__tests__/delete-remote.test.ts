@@ -63,6 +63,11 @@ async function refExists(dir: string, ref: string): Promise<boolean> {
   return r.exitCode === 0;
 }
 
+/** Remove a ref in a fixture repo (the bare origin, or the clone). */
+async function dropRef(dir: string, ref: string): Promise<void> {
+  await $`git -C ${dir} update-ref -d ${ref}`.quiet();
+}
+
 async function ghCalls(): Promise<string[]> {
   const log = Bun.file(`${stubDir}/calls.log`);
   if (!(await log.exists())) return [];
@@ -110,7 +115,18 @@ exit 1
 `,
   );
   await fs.chmod(`${stubDir}/gh`, 0o755);
+
+  // child's open PR targets feat/mid, as on GitHub (PR_BASE_STUB reads these).
+  await writePr(143, { state: "OPEN", baseRefName: "feat/mid" });
 });
+
+async function writePr(n: number, data: { state: string; baseRefName: string }) {
+  await Bun.write(`${stubDir}/${n}.json`, JSON.stringify(data));
+}
+
+async function prBase(n: number): Promise<string> {
+  return JSON.parse(await Bun.file(`${stubDir}/${n}.json`).text()).baseRefName;
+}
 
 afterEach(async () => {
   await cleanup(tmpDir, remoteDir, stubDir);
@@ -165,5 +181,99 @@ describe("gh-stack delete, remote branch", () => {
     expect(await refExists(remoteDir, "refs/heads/feat/mid")).toBe(true);
     expect(await refExists(tmpDir, "refs/remotes/origin/feat/mid")).toBe(true);
     expect(await refExists(tmpDir, "refs/heads/feat/mid")).toBe(false);
+    // origin keeps the branch, so the child's PR can stay on it.
+    expect((await ghCalls()).filter((c) => c.startsWith("pr edit"))).toEqual([]);
+    expect(await prBase(143)).toBe("feat/mid");
+  });
+});
+
+// #112: GitHub closes a PR whose base branch is deleted, and won't reopen it
+// once its head is pushed again. delete moves the children's PRs first.
+describe("gh-stack delete, the children's PRs", () => {
+  test("retargets the child's PR to the new parent before deleting origin's copy", async () => {
+    const res = await runCli(["delete", "feat/mid", "--yes"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(res.out).toContain("PR #143 (child) base → parent");
+    expect(res.out).toContain(
+      "child is still built on feat/mid's commits, so its PR lists them now",
+    );
+    expect(await prBase(143)).toBe("parent");
+    const calls = await ghCalls();
+    const edit = calls.indexOf("pr edit 143 --base parent");
+    const del = calls.indexOf("api --method DELETE repos/{owner}/{repo}/git/refs/heads/feat/mid");
+    expect(edit).toBeGreaterThanOrEqual(0);
+    expect(del).toBeGreaterThan(edit);
+    expect(await refExists(remoteDir, "refs/heads/feat/mid")).toBe(false);
+  });
+
+  test("a failed retarget keeps origin's copy and names the PR", async () => {
+    await Bun.write(`${stubDir}/edit-143.fails`, "99");
+
+    const res = await runCli(["delete", "feat/mid", "--yes"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(res.out).toContain(
+      "Could not retarget PR #143 (child) to parent (GraphQL: Something went wrong (updatePullRequest))",
+    );
+    expect(res.out).toContain("Kept feat/mid: PR #143 still targets it");
+    expect(res.out).not.toContain("lists them now");
+    expect((await ghCalls()).filter((c) => c.startsWith("api"))).toEqual([]);
+    expect(await refExists(remoteDir, "refs/heads/feat/mid")).toBe(true);
+    expect(await refExists(tmpDir, "refs/remotes/origin/feat/mid")).toBe(true);
+    // The local branch and the metadata still go: the PR only needs origin's copy.
+    expect(await refExists(tmpDir, "refs/heads/feat/mid")).toBe(false);
+    expect((await readMetadata(tmpDir)).stacks["deps"]!.branches["child"]!.parent).toBe("parent");
+  });
+
+  test("another open PR on the branch keeps origin's copy, and isn't moved", async () => {
+    await writePr(200, { state: "OPEN", baseRefName: "feat/mid" });
+
+    const res = await runCli(["delete", "feat/mid", "--yes"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(res.out).toContain("Kept feat/mid: PR #200 still targets it");
+    expect(await prBase(143)).toBe("parent");
+    expect(await prBase(200)).toBe("feat/mid");
+    expect(await refExists(remoteDir, "refs/heads/feat/mid")).toBe(true);
+  });
+});
+
+// #114: origin lost the branch already (deleted on GitHub); the tracking ref
+// would linger until the next fetch --prune.
+describe("gh-stack delete, stale tracking ref", () => {
+  beforeEach(async () => {
+    await dropRef(remoteDir, "refs/heads/feat/mid");
+    expect(await refExists(tmpDir, "refs/remotes/origin/feat/mid")).toBe(true);
+  });
+
+  test("drops origin/<branch> when GitHub no longer has the branch", async () => {
+    const res = await runCli(["delete", "feat/mid", "--yes"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(res.out).toContain("Dropped stale tracking ref origin/feat/mid");
+    expect(await refExists(tmpDir, "refs/remotes/origin/feat/mid")).toBe(false);
+    expect(await refExists(tmpDir, "refs/heads/feat/mid")).toBe(false);
+    expect((await ghCalls()).filter((c) => c.startsWith("api"))).toEqual([]);
+  });
+
+  test("drops it even when no local branch is left", async () => {
+    await dropRef(tmpDir, "refs/heads/feat/mid");
+
+    const res = await runCli(["delete", "feat/mid", "--yes"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(res.out).not.toContain("No git branch found");
+    expect(await refExists(tmpDir, "refs/remotes/origin/feat/mid")).toBe(false);
+    // The missing branch doesn't make delete refuse: removing it is the fix.
+    const branches = (await readMetadata(tmpDir)).stacks["deps"]!.branches;
+    expect(Object.keys(branches).toSorted()).toEqual(["child", "parent"]);
+  });
+
+  test("--no-remote leaves the tracking ref alone", async () => {
+    const res = await runCli(["delete", "feat/mid", "--no-remote", "--yes"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(await refExists(tmpDir, "refs/remotes/origin/feat/mid")).toBe(true);
   });
 });
