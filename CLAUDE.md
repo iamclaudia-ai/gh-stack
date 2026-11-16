@@ -15,7 +15,7 @@ A Bun-compiled CLI tool for managing stacked PRs in Git repos that use squash-me
 bun install              # Install deps
 bun run build            # Compile standalone binary → dist/gh-stack
 bun run src/index.ts     # Run in dev mode
-bun test                 # Run tests
+bun run test             # Run tests (8 files in parallel, ~1 min)
 ```
 
 ## Tech Stack
@@ -66,12 +66,18 @@ ln -sf "$(pwd)/dist/gh-stack" ~/.local/bin/gh-stack
 Test against real stacks in `~/Projects/beehiiv/swarm` during development.
 For automated tests, create temp git repos with fabricated branch structures.
 
+Run the suite with `bun run test`, not bare `bun test`: bare `bun test` runs the
+files one at a time (~6 min), and bunfig.toml has no setting for `--parallel`.
+8 workers is faster than one per core: the tests spawn ~32,000 git processes,
+and with 16 workers they contend in the kernel. Run a single file with
+`bun test <path>` as usual.
+
 ## Release Process
 
 When making changes, follow these steps:
 
 1. **Update docs** — Keep `README.md` in sync with any command/flag changes
-2. **Run tests** — `bun test` (must pass before committing)
+2. **Run tests** — `bun run test` (must pass before committing)
 3. **Commit** — Use conventional commits
 4. **Bump version** — Update `package.json` version + add entry to `CHANGELOG.md`
 5. **Tag** — `git tag -a v0.x.y -m "Release v0.x.y — summary"`
