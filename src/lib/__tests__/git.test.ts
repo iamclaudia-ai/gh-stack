@@ -161,39 +161,6 @@ describe("deleteLocalBranch", () => {
   });
 });
 
-describe("deleteRemoteBranch", () => {
-  test("deletes a branch on origin", async () => {
-    // Stand up a bare remote whose HEAD is main, so deleting a feature
-    // branch is allowed (mirrors GitHub's default-branch behavior).
-    const remote = await fs.mkdtemp(path.join(await fs.realpath("/tmp"), "gh-stack-remote-"));
-    await $`git init --bare ${remote}`.quiet();
-    await $`git -C ${remote} symbolic-ref HEAD refs/heads/main`.quiet();
-    await $`git remote add origin ${remote}`.quiet();
-    await $`git push origin main`.quiet();
-
-    await $`git checkout -b feature-1`.quiet();
-    await $`git push origin feature-1`.quiet();
-    await $`git checkout main`.quiet();
-    expect(await git.remoteBranchExists("feature-1")).toBe(true);
-
-    const ok = await git.deleteRemoteBranch("feature-1");
-    expect(ok).toBe(true);
-    expect(await git.remoteBranchExists("feature-1")).toBe(false);
-
-    await fs.rm(remote, { recursive: true, force: true });
-  });
-
-  test("returns false when the remote branch is absent", async () => {
-    const remote = await fs.mkdtemp(path.join(await fs.realpath("/tmp"), "gh-stack-remote-"));
-    await $`git init --bare ${remote}`.quiet();
-    await $`git remote add origin ${remote}`.quiet();
-
-    expect(await git.deleteRemoteBranch("never-pushed")).toBe(false);
-
-    await fs.rm(remote, { recursive: true, force: true });
-  });
-});
-
 describe("rebaseOnto", () => {
   test("successfully rebases branch", async () => {
     // Create two branches from main

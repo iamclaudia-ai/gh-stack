@@ -431,7 +431,8 @@ export function ghStubEnv(stubDir: string): Record<string, string> {
  * The PR-base part of the fake gh (#100): `pr list --base B` prints the open
  * PRs whose N.json has base B, `pr edit N --base B` records B in N.json (and
  * fails while $GH_PR_DIR/edit-N.fails counts down), and the API delete of
- * `git/refs/heads/<b>` deletes <b> on origin.
+ * `git/refs/heads/<b>` deletes <b> in origin's bare repo. Like the real API, it
+ * runs no pre-push hook and leaves the local refs/remotes/origin/<b> alone.
  */
 export const PR_BASE_STUB = `if [ "$1 $2" = "pr list" ]; then
   base=""; prev=""
@@ -455,6 +456,6 @@ if [ "$1 $2" = "pr edit" ]; then
   exit 0
 fi
 if [ "$1 $2 $3" = "api --method DELETE" ]; then
-  git push -q origin --delete "\${4#*/git/refs/heads/}" || exit 1
+  git -C "$(git remote get-url origin)" update-ref -d "refs/heads/\${4#*/git/refs/heads/}" || exit 1
   exit 0
 fi`;
