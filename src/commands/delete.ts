@@ -131,12 +131,13 @@ OPTIONS
 
   // Discover what actually exists in git so we report (and delete) accurately
   const hasLocal = !keepBranch && (await git.localBranchExists(branchName));
-  const hasRemote = !keepBranch && !noRemote && (await git.remoteBranchExists(branchName));
+  const remote = keepBranch || noRemote ? null : await git.remoteBranchState(branchName);
+  const hasRemote = remote === "present";
   const trackingRef = `refs/remotes/origin/${branchName}`;
   // Origin may have lost the branch already (deleted on GitHub) while the
-  // tracking ref lingers until the next fetch --prune (#114).
-  const staleTracking =
-    !hasRemote && !keepBranch && !noRemote && (await git.refExists(trackingRef));
+  // tracking ref lingers until the next fetch --prune (#114). Only a definite
+  // "absent" counts: an unreachable origin may still have it.
+  const staleTracking = remote === "absent" && (await git.refExists(trackingRef));
 
   // Show what will happen
   const children = getChildren(stack, branchName);
@@ -176,12 +177,17 @@ OPTIONS
       }
       p.log.info(`Deleting remote branch ${pc.yellow(`origin/${branchName}`)}`);
     }
+    if (remote === "unknown") {
+      p.log.warn(
+        `Couldn't reach origin, so ${pc.yellow(`origin/${branchName}`)} is left as it is: it may still be on GitHub, with PRs on it`,
+      );
+    }
     if (staleTracking) {
       p.log.info(
         `Dropping ${pc.yellow(`origin/${branchName}`)}: GitHub no longer has it, only the local tracking ref is left`,
       );
     }
-    if (!hasLocal && !hasRemote && !staleTracking) {
+    if (!hasLocal && !hasRemote && !staleTracking && remote !== "unknown") {
       p.log.info(pc.dim("No git branch found to delete — stack metadata only"));
     }
   }

@@ -110,6 +110,10 @@ if [ "$1" = "api" ] && [ -f "$GH_PR_DIR/api.fail" ]; then
   echo "gh: Resource not accessible by integration (HTTP 403)" >&2
   exit 1
 fi
+if [ "$1 $2" = "pr list" ] && [ -f "$GH_PR_DIR/list.fail" ]; then
+  echo "error connecting to api.github.com" >&2
+  exit 1
+fi
 ${PR_BASE_STUB}
 exit 1
 `,
@@ -280,5 +284,90 @@ describe("gh-stack delete, stale tracking ref", () => {
 
     expect(res.exitCode).toBe(0);
     expect(await refExists(tmpDir, "refs/remotes/origin/feat/mid")).toBe(true);
+  });
+
+  test("--keep-branch leaves the tracking ref alone", async () => {
+    const res = await runCli(["delete", "feat/mid", "--keep-branch", "--yes"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(await refExists(tmpDir, "refs/remotes/origin/feat/mid")).toBe(true);
+    expect(await refExists(tmpDir, "refs/heads/feat/mid")).toBe(true);
+  });
+});
+
+describe("gh-stack delete, when GitHub or origin can't be asked", () => {
+  test("an unreachable origin isn't taken for a deleted branch", async () => {
+    // ls-remote exits 128 here (unreachable), not 2 (no such branch).
+    await $`git -C ${tmpDir} remote set-url origin /nonexistent/gh-stack-origin`.quiet();
+
+    const res = await runCli(["delete", "feat/mid", "--yes"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(res.out).toContain(
+      "Couldn't reach origin, so origin/feat/mid is left as it is: it may still be on GitHub, with PRs on it",
+    );
+    expect(res.out).not.toContain("no longer has it");
+    expect(res.out).not.toContain("Dropped stale tracking ref");
+    expect(await refExists(tmpDir, "refs/remotes/origin/feat/mid")).toBe(true);
+    expect(await ghCalls()).toEqual([]);
+    expect(await refExists(remoteDir, "refs/heads/feat/mid")).toBe(true);
+  });
+
+  test("a failed `gh pr list` keeps origin's copy", async () => {
+    await Bun.write(`${stubDir}/list.fail`, "");
+
+    const res = await runCli(["delete", "feat/mid", "--yes"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(res.out).toContain("Kept feat/mid: couldn't ask GitHub whether a PR still targets it");
+    expect((await ghCalls()).filter((c) => c.startsWith("api"))).toEqual([]);
+    expect(await refExists(remoteDir, "refs/heads/feat/mid")).toBe(true);
+  });
+});
+
+describe("gh-stack delete, scope of the missing-branch exemption", () => {
+  test("another stack branch missing locally still refuses, and origin is left alone", async () => {
+    await dropRef(tmpDir, "refs/heads/child");
+
+    const res = await runCli(["delete", "feat/mid", "--yes"]);
+
+    expect(res.exitCode).toBe(1);
+    expect(res.out).toContain("Invalid stack metadata");
+    expect(await ghCalls()).toEqual([]);
+    expect(await refExists(remoteDir, "refs/heads/feat/mid")).toBe(true);
+    expect(await refExists(tmpDir, "refs/heads/feat/mid")).toBe(true);
+  });
+});
+
+describe("gh-stack delete, a root with two children", () => {
+  test("moves both PRs to the base and records prBase in each resulting stack", async () => {
+    await createBranch(tmpDir, "sib", "parent");
+    await makeCommit(tmpDir, "sib.txt", "sib\n", "sib: commit");
+    await $`git -C ${tmpDir} checkout -q main`.quiet();
+    await $`git -C ${tmpDir} push -q --no-verify origin sib`.quiet();
+    await writeMetadata(tmpDir, {
+      version: 2,
+      current_stack: "deps",
+      stacks: {
+        deps: { ...DEPS, branches: { ...DEPS.branches, sib: { parent: "parent", pr: 144 } } },
+      },
+    });
+    expect((await runCli(["doctor"])).exitCode).toBe(0);
+    await writePr(142, { state: "OPEN", baseRefName: "parent" });
+    await writePr(144, { state: "OPEN", baseRefName: "parent" });
+
+    const res = await runCli(["delete", "parent", "--yes"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(await prBase(142)).toBe("main");
+    expect(await prBase(144)).toBe("main");
+    expect(await refExists(remoteDir, "refs/heads/parent")).toBe(false);
+    // feat/mid keeps "deps"; sib splits off into a stack of its own.
+    const meta = await readMetadata(tmpDir);
+    const entry = (b: string) => Object.values(meta.stacks).find((s) => s.branches[b])?.branches[b];
+    expect(Object.values(meta.stacks).filter((s) => s.branches["sib"]).length).toBe(1);
+    expect(meta.stacks["deps"]!.branches["sib"]).toBeUndefined();
+    expect(entry("feat/mid")!.prBase).toBe("main");
+    expect(entry("sib")!.prBase).toBe("main");
   });
 });
