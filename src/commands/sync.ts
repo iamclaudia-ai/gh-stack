@@ -1,7 +1,6 @@
 // gh-stack sync — Fetch main, rebase base branch onto main, then restack all
 import * as p from "../lib/output.ts";
 import pc from "picocolors";
-import { $ } from "bun";
 import * as git from "../lib/git.ts";
 import {
   findStackForBranch,
@@ -564,7 +563,7 @@ async function advanceMergedBottoms(
   }
 
   const targetRef = `origin/${trunk}`;
-  await $`git fetch origin ${trunk}`.quiet();
+  await git.runGitOrThrow(["fetch", "origin", trunk]);
   await takeSnapshot(meta, stackName, "sync-advance");
   const originalStack = structuredClone(stack);
 
@@ -611,7 +610,7 @@ async function advanceMergedBottoms(
   if (!surviving || getOrderedBranches(surviving).length === 0) {
     try {
       await git.checkout(trunk);
-      await $`git pull origin ${trunk}`.quiet();
+      await git.runGitOrThrow(["pull", "origin", trunk]);
     } catch {
       // best-effort local sync
     }

@@ -665,7 +665,7 @@ OPTIONS
     checkoutSpinner.start(`Checking out base branch ${pc.yellow(baseBranch)}...`);
     let localBehind = false;
     try {
-      await $`git fetch origin`.quiet();
+      await git.runGitOrThrow(["fetch", "origin"]);
       await git.checkout(baseBranch);
 
       // Compare local vs origin to flag the user if their local base is stale
@@ -843,14 +843,14 @@ OPTIONS
   // git won't check it out twice: say where it is instead of failing (#81).
   const mainHolder = await git.worktreeHolding("main").catch(() => null);
   try {
-    await $`git fetch origin`.quiet();
+    await git.runGitOrThrow(["fetch", "origin"]);
     if (mainHolder) {
       pullSpinner.stop(
         `Fetched origin. main is checked out in the worktree at ${mainHolder.path}; update it there: ${pc.dim(`git -C ${git.shellQuote(mainHolder.path)} pull --ff-only`)}`,
       );
     } else {
       await git.checkout("main");
-      await $`git pull origin main`.quiet();
+      await git.runGitOrThrow(["pull", "origin", "main"]);
       pullSpinner.stop("Local branches synced");
     }
   } catch {
@@ -1104,7 +1104,7 @@ async function fetchTrunkWithMerge(
   let mergeCommit: string | null = null;
   for (let attempt = 0; ; attempt++) {
     mergeCommit ??= (await getPrMergeState(prNumber))?.mergeCommit ?? null;
-    await $`git fetch origin ${trunk}`.nothrow().quiet();
+    await git.runGit(["fetch", "origin", trunk]);
     if (mergeCommit && (await git.isAncestor(mergeCommit, `origin/${trunk}`))) {
       return { ok: true, mergeCommit };
     }
@@ -1447,7 +1447,7 @@ async function mergeBaseOnly(deleteFlag: boolean, dryRun: boolean, args: string[
     pullSpinner.start("Syncing local trunk...");
     try {
       await git.checkout(trunk);
-      await $`git pull origin ${trunk}`.quiet();
+      await git.runGitOrThrow(["pull", "origin", trunk]);
       pullSpinner.stop("Local trunk synced");
     } catch {
       pullSpinner.stop(pc.dim(`Could not sync ${trunk} — run git pull manually`));

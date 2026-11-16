@@ -67,6 +67,12 @@ if (!load) {
   process.exit(1);
 }
 
+// One run asks git the same questions many times; cache the answers for this
+// run, dropping each kind whenever a write can change it (#108).
+const { setGitCache, GitLockError, WorktreeBusyError, describeBlockedBranch, rebaseCommand } =
+  await import("./lib/git.ts");
+setGitCache(true);
+
 // Every command needs a git repo except those in RUNS_OUTSIDE_REPO, and a
 // help page, which shows anywhere.
 if (!RUNS_OUTSIDE_REPO.has(command) && !parsed.showHelp) {
@@ -75,8 +81,6 @@ if (!RUNS_OUTSIDE_REPO.has(command) && !parsed.showHelp) {
 
 // A config problem (malformed TOML, a non-boolean env value) is reported as
 // one clean line, whichever command hit it.
-const { GitLockError, WorktreeBusyError, describeBlockedBranch, rebaseCommand } =
-  await import("./lib/git.ts");
 const { PrFetchError } = await import("./lib/github.ts");
 try {
   await (await load()).default(parsed.commandArgs);

@@ -24,10 +24,9 @@
 // own stack files (under its own git dir). `ghstack-gitdir` records which
 // worktree wrote a branch's membership, so a write in one worktree leaves the
 // branches another worktree is stacking alone (#64).
-import { $ } from "bun";
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
-import { runGit } from "./git.ts";
+import { ghStackBranchConfig, runGit } from "./git.ts";
 
 export interface BranchMembership {
   stack?: string;
@@ -118,13 +117,7 @@ export function hasMembership(m: BranchMembership): boolean {
 export async function allBranchMemberships(): Promise<Map<string, BranchMembership>> {
   const out = new Map<string, BranchMembership>();
 
-  const { stdout, exitCode } = await $`git config --get-regexp ${"^branch\\..*\\.ghstack-"}`
-    .quiet()
-    .nothrow();
-  // exit 1 simply means no matching keys — an empty repo, not an error.
-  if (exitCode !== 0) return out;
-
-  const text = stdout.toString().trim();
+  const text = (await ghStackBranchConfig()).trim();
   if (!text) return out;
 
   for (const line of text.split("\n")) {

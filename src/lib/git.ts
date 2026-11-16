@@ -70,6 +70,105 @@ export interface GitResult {
   stderr: string;
 }
 
+// ── Per-run cache of git answers (#108) ────────────────────────────────────
+//
+// One gh-stack run asks git the same questions over and over: which branch is
+// checked out, where a branch points, whether it exists, every branch's
+// gh-stack config. Each answer costs a git process (~6 ms on macOS), and a
+// restack asked ~65 of them per run, half of them repeats.
+//
+// Answers are cached by what can change them. Every write gh-stack makes goes
+// through runGit (or reports itself with noteGitWrite), which clears the kinds
+// of answer that command can change. A rebase moves refs and HEAD but can't
+// touch config; a config write can't move a branch. A command it doesn't know
+// clears everything.
+//
+// The cache is off unless the CLI turns it on (index.ts). Tests that call
+// these helpers in-process change their repos with raw git commands the cache
+// never hears about.
+
+type CacheKind =
+  /** The git dir and the worktree root: fixed for a directory. Never cleared. */
+  | "repo"
+  /** gh-stack's `branch.<name>.ghstack-*` config. */
+  | "config"
+  /** Which local branches exist. */
+  | "branches"
+  /** Which branch HEAD names. */
+  | "head"
+  /** `git worktree list`, and which branch each worktree is using. */
+  | "worktrees"
+  /** What a ref or revision resolves to. */
+  | "refs";
+
+const MUTABLE: CacheKind[] = ["config", "branches", "head", "worktrees", "refs"];
+
+let cacheOn = false;
+const caches = new Map<CacheKind, Map<string, Promise<unknown>>>();
+
+/** Turn the per-run cache on (the CLI) or off; either way it starts empty. */
+export function setGitCache(on: boolean): void {
+  cacheOn = on;
+  caches.clear();
+}
+
+/**
+ * Forget every answer that can change: after a prompt, say, when the user may
+ * have changed the repo from another terminal.
+ */
+export function clearGitCache(): void {
+  for (const kind of MUTABLE) caches.delete(kind);
+}
+
+/** `read()`, or its earlier answer for the same kind and key. Failures aren't kept. */
+async function cached<T>(kind: CacheKind, key: string, read: () => Promise<T>): Promise<T> {
+  if (!cacheOn) return read();
+  let entries = caches.get(kind);
+  if (!entries) caches.set(kind, (entries = new Map()));
+  const hit = entries.get(key) as Promise<T> | undefined;
+  if (hit) return hit;
+  const answer = read();
+  entries.set(key, answer);
+  answer.catch(() => {
+    if (entries.get(key) === answer) entries.delete(key);
+  });
+  return answer;
+}
+
+/** The kinds of answer `git <args>` can change. */
+function changedBy(args: string[]): CacheKind[] {
+  switch (args[0]) {
+    case "update-index": // rewrites the index's stat cache, nothing a lookup reads
+      return [];
+    case "config":
+      return ["config"];
+    case "fetch":
+    case "push": // remote-tracking refs (and upstream config, not a ghstack- key)
+    case "tag":
+    case "reset":
+    case "merge":
+    case "commit":
+    case "cherry-pick":
+    case "revert":
+      return ["refs"];
+    case "update-ref": // can create a branch
+      return ["refs", "branches"];
+    case "rebase": // checks the branch out first, and detaches HEAD while it runs
+    case "pull": // may rebase (pull.rebase), and stop detached on a conflict
+      return ["refs", "head", "worktrees"];
+    case "checkout": // `-b`, and `checkout <name>` creating it from origin/<name>
+    case "switch":
+      return ["refs", "branches", "head", "worktrees"];
+    default: // branch -D/-m, worktree, stash, anything else
+      return MUTABLE;
+  }
+}
+
+/** Report a git command that may have changed the repo, so cached answers it affects are dropped. */
+export function noteGitWrite(args: string[]): void {
+  for (const kind of changedBy(args)) caches.delete(kind);
+}
+
 /**
  * Run `git <args>`, retrying while another process holds a lock it needs.
  * Retrying is safe because git takes the lock before changing anything: the
@@ -141,6 +240,9 @@ async function retryLocks(
     // open an editor for it.
     if (retry.resumesRebase) shell = shell.env({ ...process.env, GIT_EDITOR: "true" });
     const raw = await shell;
+    // Even a failed attempt may have changed something (a rebase that stopped
+    // partway), so its cached answers go either way.
+    noteGitWrite(retry.next);
     const result = {
       exitCode: raw.exitCode,
       stdout: raw.stdout.toString(),
@@ -263,7 +365,7 @@ function startLockEpisode(lock: string, args: string[]): LockEpisode {
         const entry = {
           time,
           lock,
-          worktree: (await $`git rev-parse --show-toplevel`.quiet().nothrow().text()).trim(),
+          worktree: await repoRoot().catch(() => ""),
           command: `git ${args.join(" ")}`,
           ghStack: process.argv.slice(2).join(" "),
           outcome,
@@ -301,7 +403,7 @@ async function hasUnmergedPaths(cwd?: string): Promise<boolean> {
  * Throws if in detached HEAD state.
  */
 export async function currentBranch(): Promise<string> {
-  const result = await $`git rev-parse --abbrev-ref HEAD`.text();
+  const result = await cached("head", "", () => $`git rev-parse --abbrev-ref HEAD`.text());
   const branch = result.trim();
   if (branch === "HEAD") {
     throw new Error("Detached HEAD state — please checkout a branch first");
@@ -313,19 +415,17 @@ export async function currentBranch(): Promise<string> {
  * Check if we're inside a git repository.
  */
 export async function isGitRepo(): Promise<boolean> {
-  try {
-    await $`git rev-parse --git-dir`.quiet();
-    return true;
-  } catch {
-    return false;
-  }
+  return gitDir().then(
+    () => true,
+    () => false,
+  );
 }
 
 /**
  * Get the path to the .git directory (handles worktrees too).
  */
 export async function gitDir(): Promise<string> {
-  const result = await $`git rev-parse --git-dir`.text();
+  const result = await cached("repo", "git-dir", () => $`git rev-parse --git-dir`.quiet().text());
   return result.trim();
 }
 
@@ -334,7 +434,9 @@ export async function gitDir(): Promise<string> {
  * the main checkout, which can't identify a worktree from another one.
  */
 export async function absoluteGitDir(cwd?: string): Promise<string> {
-  const result = await inDir($`git rev-parse --absolute-git-dir`, cwd).text();
+  const result = await cached("repo", `absolute-git-dir ${cwd ?? ""}`, () =>
+    inDir($`git rev-parse --absolute-git-dir`, cwd).text(),
+  );
   return result.trim();
 }
 
@@ -342,7 +444,7 @@ export async function absoluteGitDir(cwd?: string): Promise<string> {
  * Get the absolute path to the repository's working-tree root.
  */
 export async function repoRoot(): Promise<string> {
-  const result = await $`git rev-parse --show-toplevel`.text();
+  const result = await cached("repo", "toplevel", () => $`git rev-parse --show-toplevel`.text());
   return result.trim();
 }
 
@@ -418,10 +520,25 @@ export async function createBranch(name: string): Promise<void> {
 }
 
 /**
+ * gh-stack's own branch config (`branch.<name>.ghstack-*`, see
+ * branch-config.ts), one `key value` per line; empty when there is none.
+ * Only gh-stack writes these keys, and only with `git config` and `git branch`.
+ */
+export async function ghStackBranchConfig(): Promise<string> {
+  return cached("config", "", async () => {
+    const { stdout, exitCode } = await $`git config --get-regexp ${"^branch\\..*\\.ghstack-"}`
+      .quiet()
+      .nothrow();
+    // exit 1 simply means no matching keys.
+    return exitCode === 0 ? stdout.toString() : "";
+  });
+}
+
+/**
  * Get the SHA of a ref.
  */
 export async function revParse(ref: string): Promise<string> {
-  const result = await $`git rev-parse ${ref}`.text();
+  const result = await cached("refs", ref, () => $`git rev-parse ${ref}`.text());
   return result.trim();
 }
 
@@ -495,6 +612,8 @@ export async function forcePushWithLease(
     : "--force-with-lease";
   const { exitCode, stdout } =
     await $`git push -u ${lease} --force-if-includes origin ${branch} 2>&1`.nothrow().quiet();
+  // Not runGit: a hook's output needs stdout and stderr interleaved (2>&1).
+  noteGitWrite(["push"]);
   if (exitCode === 0) return { ok: true };
   const output = stdout.toString();
   const reason = output.includes("remote ref updated since checkout")
@@ -672,6 +791,7 @@ function failureExcerpt(lines: string[], end: number): string[] {
  */
 export async function fetchObjectsOnly(refs: string[]): Promise<boolean> {
   if (refs.length === 0) return true;
+  // Moves no ref, so no cached answer changes; that's why it isn't runGit.
   const { exitCode } = await $`git fetch --quiet --no-write-fetch-head --refmap= origin ${refs}`
     .nothrow()
     .quiet();
@@ -715,10 +835,12 @@ export async function remoteBranchExists(branch: string): Promise<boolean> {
  * Check if a branch exists locally.
  */
 export async function localBranchExists(branch: string): Promise<boolean> {
-  const { exitCode } = await $`git show-ref --verify --quiet refs/heads/${branch}`
-    .nothrow()
-    .quiet();
-  return exitCode === 0;
+  return cached("branches", branch, async () => {
+    const { exitCode } = await $`git show-ref --verify --quiet refs/heads/${branch}`
+      .nothrow()
+      .quiet();
+    return exitCode === 0;
+  });
 }
 
 /**
@@ -745,7 +867,7 @@ export async function renameBranch(oldName: string, newName: string): Promise<bo
  * Delete a branch on the remote (origin). Returns false on failure.
  */
 export async function deleteRemoteBranch(branch: string): Promise<boolean> {
-  const { exitCode } = await $`git push origin --delete ${branch}`.nothrow().quiet();
+  const { exitCode } = await runGit(["push", "origin", "--delete", branch]);
   return exitCode === 0;
 }
 
@@ -801,6 +923,11 @@ export interface Worktree {
 
 /** Every worktree of this repo, with the branch each one is using. */
 export async function listWorktrees(): Promise<Worktree[]> {
+  // A copy: callers may change what they get back.
+  return structuredClone(await cached("worktrees", "", readWorktrees));
+}
+
+async function readWorktrees(): Promise<Worktree[]> {
   const out = await $`git worktree list --porcelain`.quiet().nothrow().text();
   const worktrees: Worktree[] = [];
   for (const block of out.split(/\n\n+/)) {
@@ -1103,7 +1230,7 @@ export async function commit(message: string): Promise<void> {
  * Fetch origin main.
  */
 export async function fetchMain(): Promise<void> {
-  await $`git fetch origin main`.quiet();
+  await runGitOrThrow(["fetch", "origin", "main"]);
 }
 
 /**
