@@ -240,8 +240,8 @@ class SubmitAbort extends Error {
  */
 async function isBranchUpToDate(branch: string): Promise<boolean> {
   try {
-    const localSha = (await $`git rev-parse ${branch}`.text()).trim();
-    const remoteSha = (await $`git rev-parse origin/${branch}`.text()).trim();
+    const localSha = await git.revParse(branch);
+    const remoteSha = await git.revParse(`origin/${branch}`);
     return localSha === remoteSha;
   } catch {
     // Remote branch doesn't exist yet

@@ -13,6 +13,7 @@
 // reached with no TTY on stdin, nothing can ever answer it, so we fail fast
 // instead of blocking forever (#33).
 import * as clack from "@clack/prompts";
+import { clearGitCache } from "./git.ts";
 
 let _plain = false;
 let stderrOnly = false;
@@ -68,19 +69,22 @@ function ensureInteractive(message: string): void {
   process.exit(1);
 }
 
+// While a prompt waits, the user may change the repo from another terminal, so
+// each one ends by dropping the git answers cached so far (#108).
+
 export const text: typeof clack.text = (opts) => {
   ensureInteractive(opts.message);
-  return clack.text(opts);
+  return clack.text(opts).finally(clearGitCache);
 };
 
 export const confirm: typeof clack.confirm = (opts) => {
   ensureInteractive(opts.message);
-  return clack.confirm(opts);
+  return clack.confirm(opts).finally(clearGitCache);
 };
 
 export const select: typeof clack.select = (opts) => {
   ensureInteractive(opts.message);
-  return clack.select(opts);
+  return clack.select(opts).finally(clearGitCache);
 };
 
 // ── Banner / error ──

@@ -165,7 +165,7 @@ export default async function join(args: string[]): Promise<void> {
   // Real runs measure against the latest trunk; a dry run stays read-only and
   // uses the last fetch.
   const trunk = await git.trunkBranch();
-  if (!dryRun) await $`git fetch origin ${trunk}`.nothrow().quiet();
+  if (!dryRun) await git.runGit(["fetch", "origin", trunk]);
 
   const plan = await buildPlan(meta, { incoming, above, noPush, startBranch, trunk });
   const rerun = rerunCommand(incoming, above, noPush);
