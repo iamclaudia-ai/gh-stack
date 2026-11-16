@@ -271,7 +271,7 @@ Renames a tracked branch (`git branch -m`) and updates the stack so it stays tra
 gh-stack delete [<branch>] [-k|--keep-branch] [--no-remote]
 ```
 
-Removes a branch from its stack, re-parents its children, and deletes the local branch and its remote copy. Deleting a root with several children makes each child its own stack; deleting the last branch archives the stack. With no branch it opens a picker.
+Removes a branch from its stack, re-parents its children, and deletes the local branch and its copy on GitHub (through the API, so no pre-push hook runs). Deleting a root with several children makes each child its own stack; deleting the last branch archives the stack. With no branch it opens a picker.
 
 - `-k, --keep-branch`: remove it from the stack only, like `untrack`
 - `--no-remote`: delete the local branch but keep the remote one

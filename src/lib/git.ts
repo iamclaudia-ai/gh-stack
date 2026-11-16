@@ -864,14 +864,6 @@ export async function renameBranch(oldName: string, newName: string): Promise<bo
 }
 
 /**
- * Delete a branch on the remote (origin). Returns false on failure.
- */
-export async function deleteRemoteBranch(branch: string): Promise<boolean> {
-  const { exitCode } = await runGit(["push", "origin", "--delete", branch]);
-  return exitCode === 0;
-}
-
-/**
  * Create a temporary tag at a specific commit.
  */
 export async function createTag(name: string, commit: string): Promise<void> {

@@ -263,6 +263,9 @@ describe("merge --base -d deletes the merged branch only once no PR targets it (
     expect(deletion).toBeGreaterThan(retarget);
     expect(calls[deletion]).toEndWith("/git/refs/heads/pr1");
     expect(await remoteHas("pr1")).toBe(false);
+    // The API leaves the remote-tracking ref behind; merge -d drops it.
+    const tracking = $`git -C ${tmpDir} rev-parse --verify -q refs/remotes/origin/pr1`;
+    expect((await tracking.nothrow().quiet()).exitCode).not.toBe(0);
   });
 
   test("a retarget that keeps failing keeps pr1, on GitHub and locally, and says why", async () => {

@@ -463,7 +463,8 @@ gh-stack update-prs    # repair stack viz in PR descriptions + adopt PRs opened 
 
 To take a branch out of a stack without deleting it (it should stay local, or it
 belongs elsewhere), use `gh-stack untrack <branch>`. `delete` also deletes the
-git branch and origin's copy unless you pass `--keep-branch`.
+git branch and origin's copy unless you pass `--keep-branch` (origin's copy through
+the GitHub API, so the repo's pre-push hook doesn't run).
 
 ## Stack visualization
 

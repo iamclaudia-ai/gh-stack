@@ -18,6 +18,7 @@ import {
 import { takeSnapshot } from "../lib/snapshot.ts";
 import { selectBranch, confirmAction } from "../lib/ui.ts";
 import * as git from "../lib/git.ts";
+import { deleteBranchOnGitHub } from "../lib/github.ts";
 
 const UNTRACK_HELP = `
 gh-stack untrack — Stop tracking a branch; the branch and its PR stay
@@ -57,7 +58,8 @@ USAGE
 
 Removes the branch from the stack and deletes the underlying git branch,
 re-parenting any children to the removed branch's parent. If the deleted
-branch was pushed, its remote counterpart is deleted too.
+branch was pushed, its copy on GitHub is deleted too, through the API, so the
+repo's pre-push hook doesn't run.
 
 Deleting a stack's root that has several children leaves them side by side on
 the base, so each child (with the branches above it) becomes its own stack.
@@ -195,13 +197,17 @@ OPTIONS
   }
 
   // Delete the actual git branch(es)
+  // Through the API, as merge -d does (#107): a `git push --delete` would run
+  // the repo's pre-push hook, which can be a full test suite.
   if (hasRemote) {
-    const ok = await git.deleteRemoteBranch(branchName);
-    if (ok) {
+    const deleted = await deleteBranchOnGitHub(branchName);
+    if (deleted.ok) {
+      // Like `git push --delete`, drop the remote-tracking ref too.
+      await git.runGit(["update-ref", "-d", `refs/remotes/origin/${branchName}`]);
       p.log.success(`Deleted remote branch ${pc.dim(`origin/${branchName}`)}`);
     } else {
       p.log.warn(
-        `Could not delete remote branch ${pc.dim(`origin/${branchName}`)} (delete it manually)`,
+        `Could not delete remote branch ${pc.dim(`origin/${branchName}`)} on GitHub (${deleted.error}). Delete it manually.`,
       );
     }
   }
