@@ -22,6 +22,33 @@ async function snapshot(gitDir: string) {
   };
 }
 
+// #106 helpers: one pre-push stdin line, and the hook run with a failing stub `bun`.
+const zero = "0".repeat(40);
+const a = "a".repeat(40);
+const b = "b".repeat(40);
+const line = (localRef: string, localSha: string, remoteRef: string, remoteSha: string) =>
+  `${localRef} ${localSha} ${remoteRef} ${remoteSha}\n`;
+
+async function runHook(stdin: string) {
+  const stubDir = await fs.mkdtemp(path.join(await fs.realpath("/tmp"), "gh-stack-stub-"));
+  try {
+    await Bun.write(path.join(stubDir, "bun"), '#!/bin/sh\necho "STUB CHECKS RAN"\nexit 1\n');
+    await fs.chmod(path.join(stubDir, "bun"), 0o755);
+    const proc = Bun.spawn(["sh", "-e", path.join(repoRoot, ".husky/pre-push")], {
+      cwd: repoRoot,
+      env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}` },
+      stdin: new TextEncoder().encode(stdin),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const output =
+      (await new Response(proc.stdout).text()) + (await new Response(proc.stderr).text());
+    return { exitCode: await proc.exited, ran: output.includes("STUB CHECKS RAN"), output };
+  } finally {
+    await fs.rm(stubDir, { recursive: true, force: true });
+  }
+}
+
 describe("git env isolation", () => {
   test("GIT_DIR from a hook does not leak into the test helpers", async () => {
     const victim = await fs.mkdtemp(path.join(await fs.realpath("/tmp"), "gh-stack-victim-"));
@@ -152,32 +179,6 @@ describe("git env isolation", () => {
   // `<local ref> <local sha> <remote ref> <remote sha>`. The stub `bun` fails
   // loudly, so a run of the checks shows up as exit 1 with its marker.
   describe("pre-push skips pushes with no branch update", () => {
-    const zero = "0".repeat(40);
-    const a = "a".repeat(40);
-    const b = "b".repeat(40);
-    const line = (localRef: string, localSha: string, remoteRef: string, remoteSha: string) =>
-      `${localRef} ${localSha} ${remoteRef} ${remoteSha}\n`;
-
-    async function runHook(stdin: string) {
-      const stubDir = await fs.mkdtemp(path.join(await fs.realpath("/tmp"), "gh-stack-stub-"));
-      try {
-        await Bun.write(path.join(stubDir, "bun"), '#!/bin/sh\necho "STUB CHECKS RAN"\nexit 1\n');
-        await fs.chmod(path.join(stubDir, "bun"), 0o755);
-        const proc = Bun.spawn(["sh", "-e", path.join(repoRoot, ".husky/pre-push")], {
-          cwd: repoRoot,
-          env: { ...process.env, PATH: `${stubDir}:${process.env.PATH}` },
-          stdin: new TextEncoder().encode(stdin),
-          stdout: "pipe",
-          stderr: "pipe",
-        });
-        const output =
-          (await new Response(proc.stdout).text()) + (await new Response(proc.stderr).text());
-        return { exitCode: await proc.exited, ran: output.includes("STUB CHECKS RAN"), output };
-      } finally {
-        await fs.rm(stubDir, { recursive: true, force: true });
-      }
-    }
-
     test.each([
       ["a branch deletion", line("(delete)", zero, "refs/heads/old", a)],
       [
@@ -204,6 +205,8 @@ describe("git env isolation", () => {
       ["a branch update", line("refs/heads/feat", b, "refs/heads/feat", a)],
       // remote sha all zeros: only the local sha marks a deletion.
       ["a new branch", line("refs/heads/feat", a, "refs/heads/feat", zero)],
+      // a real sha can start with zeros: only an all-zero sha is a deletion.
+      ["a zero-prefixed sha", line("refs/heads/feat", "0".repeat(39) + "1", "refs/heads/feat", a)],
       [
         "a branch update pushed with a tag and a deletion",
         line("refs/tags/v1", a, "refs/tags/v1", zero) +
