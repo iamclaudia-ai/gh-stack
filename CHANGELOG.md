@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.19.31
 
 ### 🐛 Fixes
 - **gh-stack no longer mistakes another branch on origin for the one it's asking about.** The check asked `git ls-remote` for the bare name, which matches any branch ending in it, so `mid` was found through origin's `feat/mid`. `delete mid` then tried to delete a `mid` that was never on GitHub and warned that it couldn't, and kept a stale `origin/mid` it should have dropped. `merge -d` and `join` used the same check. Now it asks for `refs/heads/<branch>`, which matches only that branch. (#118, #120)
