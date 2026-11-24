@@ -75,6 +75,22 @@ describe("trunkBranch", () => {
     expect(await trunkBranch()).toBe("master");
   });
 
+  test("ignores an origin/HEAD left pointing at a pruned branch", async () => {
+    // A clone from before origin renamed master to main: fetch --prune deleted
+    // origin/master, but origin/HEAD still names it.
+    const remote = await fs.mkdtemp(path.join(await fs.realpath("/tmp"), "gh-stack-remote-"));
+    try {
+      await $`git init --bare -q -b main ${remote}`.quiet();
+      await $`git -C ${tmpDir} remote add origin ${remote}`.quiet();
+      await $`git -C ${tmpDir} push -q -u origin main`.quiet();
+      await $`git -C ${tmpDir} symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/master`.quiet();
+      process.chdir(tmpDir);
+      expect(await trunkBranch()).toBe("main");
+    } finally {
+      await cleanup(remote);
+    }
+  });
+
   test("is main in a plain repo on main", async () => {
     process.chdir(tmpDir);
     expect(await trunkBranch()).toBe("main");
@@ -115,6 +131,36 @@ describe("a stack in a repo on master", () => {
 
     const res = await runCli(["sync", "--yes", "--no-push"]);
     expect(res.output).not.toContain("couldn't find remote ref main");
+    expect(res.exitCode).toBe(0);
+    expect(await isAncestor(tmpDir, upstream, "feature")).toBe(true);
+  });
+});
+
+describe("a stack in a repo whose default branch is develop", () => {
+  test("init roots on develop and sync rebases onto origin/develop", async () => {
+    // main exists too, but origin's HEAD names develop: develop is the trunk,
+    // not a split stack's base.
+    await $`git init --bare -q -b develop ${remoteDir}`.quiet();
+    await $`git -C ${tmpDir} remote add origin ${remoteDir}`.quiet();
+    await createBranch(tmpDir, "develop", "main");
+    await $`git -C ${tmpDir} push -q -u origin main develop`.quiet();
+    await $`git -C ${tmpDir} remote set-head origin develop`.quiet();
+    await createBranch(tmpDir, "feature", "develop");
+    await makeCommit(tmpDir, "feature.txt", "feature\n", "feature: add file");
+
+    expect((await runCli(["init", "--yes"])).exitCode).toBe(0);
+    const { stacks } = JSON.parse((await runCli(["stacks", "--json"])).stdout);
+    expect(stacks[0].base).toBe("develop");
+
+    await $`git clone -q -b develop ${remoteDir} ${otherDir}`.quiet();
+    await $`git -C ${otherDir} config user.email test@test.com`.quiet();
+    await $`git -C ${otherDir} config user.name Test`.quiet();
+    await makeCommit(otherDir, "upstream.txt", "upstream\n", "upstream change");
+    await $`git -C ${otherDir} push -q origin develop`.quiet();
+    const upstream = await getSha(otherDir, "HEAD");
+
+    const res = await runCli(["sync", "--yes", "--no-push"]);
+    expect(res.output).not.toContain("sync doesn't apply");
     expect(res.exitCode).toBe(0);
     expect(await isAncestor(tmpDir, upstream, "feature")).toBe(true);
   });

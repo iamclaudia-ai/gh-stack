@@ -1311,8 +1311,10 @@ export async function trunkBranch(): Promise<string> {
       .quiet();
     const head = stdout.toString().trim();
     if (exitCode === 0 && head.startsWith("refs/remotes/origin/")) {
+      // A clone from before a master → main rename keeps origin/HEAD pointing at
+      // the pruned origin/master: only believe it while that ref exists.
       const name = head.slice("refs/remotes/origin/".length);
-      if (name) return name;
+      if (name && (await refExists(head))) return name;
     }
     for (const name of ["main", "master"]) {
       if (await localBranchExists(name)) return name;
