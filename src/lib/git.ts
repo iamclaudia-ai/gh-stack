@@ -1270,25 +1270,26 @@ export async function fetchTrunk(trunk: string): Promise<void> {
 }
 
 /**
- * Get count of commits between two refs.
- */
-/**
  * The commits `ref` can reach that none of `exclude` can, as a set of SHAs:
  * one git call, however many branch tips the caller then looks up in it
  * (#130). Refs that don't exist are left out of `exclude`; empty when `ref`
- * itself is missing.
+ * itself is missing. Every rev-list here ends with `--`: without it, a branch
+ * named like a path in the worktree (`docs`) is "ambiguous" and git fails.
  */
 export async function commitsNotOn(ref: string, exclude: string[]): Promise<Set<string>> {
-  const { exitCode, stdout } = await $`git rev-list --ignore-missing ${ref} --not ${exclude}`
+  const { exitCode, stdout } = await $`git rev-list --ignore-missing ${ref} --not ${exclude} --`
     .nothrow()
     .quiet();
   if (exitCode !== 0) return new Set();
   return new Set(stdout.toString().split("\n").filter(Boolean));
 }
 
+/**
+ * Get count of commits between two refs.
+ */
 export async function commitCount(from: string, to: string): Promise<number> {
   try {
-    const result = await $`git rev-list --count ${from}..${to}`.text();
+    const result = await $`git rev-list --count ${from}..${to} --`.text();
     return parseInt(result.trim(), 10);
   } catch {
     return 0;
@@ -1301,7 +1302,7 @@ export async function commitCount(from: string, to: string): Promise<number> {
  */
 export async function commitsNotIn(branch: string, exclude: string): Promise<string[]> {
   try {
-    const result = await $`git rev-list --topo-order ${branch} --not ${exclude}`.quiet().text();
+    const result = await $`git rev-list --topo-order ${branch} --not ${exclude} --`.quiet().text();
     return result.split("\n").filter(Boolean);
   } catch {
     return [];

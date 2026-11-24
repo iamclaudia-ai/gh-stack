@@ -62,6 +62,30 @@ describe("detectBranchChain", () => {
     const chain = await detectBranchChain("b", "main");
     expect(chain).toEqual(["a", "b"]);
   });
+
+  // #130 moved detection to one `git rev-list`, which also takes paths: a
+  // branch named like a directory in the worktree was "ambiguous" and the
+  // chain came back empty, rooting `docs` at trunk without its parent.
+  test("finds the chain of a branch named like a directory in the worktree", async () => {
+    await createBranch(tmpDir, "a", "main");
+    await makeCommit(tmpDir, "a.txt", "a\n", "a: commit");
+    await createBranch(tmpDir, "docs", "a");
+    await makeCommit(tmpDir, "docs/x.md", "d\n", "docs: commit");
+    await checkout(tmpDir, "docs");
+
+    expect(await detectBranchChain("docs", "main")).toEqual(["a", "docs"]);
+  });
+
+  // The trunk can come from origin/HEAD with no local copy (#134). The missing
+  // local `main` is skipped, and origin/main still marks trunk history.
+  test("finds the chain when the trunk exists only on origin", async () => {
+    await bareChain();
+    await $`git update-ref refs/remotes/origin/main main`.quiet();
+    await checkout(tmpDir, "c");
+    await $`git branch -D main`.quiet();
+
+    expect(await detectBranchChain("c", "main")).toEqual(["a", "b", "c"]);
+  });
 });
 
 describe("resolveOrCreateStack", () => {

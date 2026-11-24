@@ -167,7 +167,7 @@ function snapshotTips(meta: StackMetadata, branch: string): string[] {
 
 /** `git rev-list` output, or null if it failed (never an empty "nothing found"). */
 async function revListLines(args: string[]): Promise<string[] | null> {
-  const { stdout, exitCode } = await $`git rev-list ${args}`.nothrow().quiet();
+  const { stdout, exitCode } = await $`git rev-list ${args} --`.nothrow().quiet();
   if (exitCode !== 0) return null;
   return stdout.toString().split("\n").filter(Boolean);
 }
