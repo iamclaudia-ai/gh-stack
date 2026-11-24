@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.19.33
 
 ### 🐛 Fixes
 - **A lock gh-stack gave up on is no longer called stale when lsof just didn't answer in time.** lsof gets 3 seconds; on a loaded machine it can take longer, and when it was killed its empty output read as "No process has it open, so it's stale; remove it: rm …", advice that deletes a lock a live git process still holds. A timed-out lsof now reports the holder as unknown (`unknown (lsof timed out)` in `lock-waits.log`), and gh-stack says to remove the lock only if no other git process is running. (#129)
