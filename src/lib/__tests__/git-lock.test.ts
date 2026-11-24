@@ -20,8 +20,8 @@ let indexLock: string;
 const FAST = [50, 100, 200, 400, 800];
 // For a lock that never frees, only the number of attempts matters.
 const GIVE_UP = [10, 10, 10, 10, 10];
-// lsof can take seconds on a loaded machine; at the 3 s default it was killed
-// and the holder came back unknown (#129). Within the 30 s test timeout.
+// lsof can take seconds on a loaded machine, past the 3 s default, and a
+// killed lsof leaves the holder unknown (#129). Within the 30 s test timeout.
 const HELPER_TIMEOUT = 20_000;
 let savedRetryDelay: string | undefined;
 
