@@ -9,6 +9,7 @@
 
 ### 🧪 Tests
 - **The lock tests no longer depend on machine speed.** "Other failures aren't retried" counted the time one `git checkout` took, which passed 100 ms under load; it now counts the attempts (`GitResult.attempts`). The lsof tests give lsof and ps 20 seconds, and the process holding the lock is `sleep` itself from the start, not a shell that has yet to `exec` it. (#129)
+- **Every test file gets the 30 s timeout, not only the first one each worker runs.** Bun scopes `setDefaultTimeout` to a file, so the preload's 30 s covered one file per test process and the rest of the suite ran with Bun's 5 s default, which a loaded machine exceeds. `bun run test` now passes `--timeout=30000`. The longer lsof limit for tests is an environment variable (`GH_STACK_TEST_HELPER_TIMEOUT_MS`), so it reaches the CLIs the tests spawn: at load ~400, a CLI's lsof ran past 3 s and "a lock that never frees" in `lock-retry.test.ts` failed the pre-push hook. (#129)
 
 ### 📚 Docs
 - **The skill `gh-stack learn` installs uses placeholder branch names in its examples** (`you/first-ABC-101`), not the author's own prefix, which an agent reading the skill in another repo could copy into real branch names. The `submit` example's PR title and body are generic too, and so are `gh-stack create --help`'s examples. (#125)

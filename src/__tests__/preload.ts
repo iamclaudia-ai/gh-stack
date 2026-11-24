@@ -93,6 +93,12 @@ for (const name of Object.keys(process.env)) {
 // after 250 ms) deletes it. Set after the scrub above, which would remove it.
 process.env.GH_STACK_TEST_RETRY_DELAY_MS = "0";
 
+// lsof and ps get 20 s instead of 3 (#129): lsof scans every process, and on
+// a loaded machine (load 400 during a sweep) it ran past 3 s and was killed,
+// so a lock nobody held read as "unknown" instead of "nobody has it open".
+// Spawned CLIs inherit it. Within the 30 s test timeout.
+process.env.GH_STACK_TEST_HELPER_TIMEOUT_MS = "20000";
+
 // No test reaches the real `gh` (#86). Commands run in-process (sync, merge,
 // restack in temp repos) and CLIs spawned without a stub of their own find this
 // fake first on PATH. It gives the answer the real gh gives in a temp repo:
@@ -122,6 +128,9 @@ delete process.env.GH_ENTERPRISE_TOKEN;
 // Most tests drive real git (temp repos, a bare remote, rebases, pushes), and
 // a few run two restacks. Bun's 5 s default fails them on a loaded machine,
 // e.g. under the pre-push hook while other work runs. bunfig.toml has no
-// timeout setting Bun reads, so it's set here; files and tests that set their
-// own still win.
+// timeout setting Bun reads. Bun scopes setDefaultTimeout to a file, so this
+// one covers only the first file a test process runs: `bun test <path>` for a
+// single file. The suite (`bun run test`, several files per worker) gets 30 s
+// from `--timeout=30000` in package.json, which reaches every file (#129).
+// Files and tests that set their own still win.
 setDefaultTimeout(30_000);

@@ -20,9 +20,6 @@ let indexLock: string;
 const FAST = [50, 100, 200, 400, 800];
 // For a lock that never frees, only the number of attempts matters.
 const GIVE_UP = [10, 10, 10, 10, 10];
-// lsof can take seconds on a loaded machine, past the 3 s default, and a
-// killed lsof leaves the holder unknown (#129). Within the 30 s test timeout.
-const HELPER_TIMEOUT = 20_000;
 let savedRetryDelay: string | undefined;
 
 beforeEach(async () => {
@@ -31,14 +28,12 @@ beforeEach(async () => {
   originalCwd = process.cwd();
   process.chdir(tmpDir);
   git.setLockRetryDelays(FAST);
-  git.setHelperTimeout(HELPER_TIMEOUT);
   savedRetryDelay = process.env[TEST_RETRY_DELAY_ENV];
   delete process.env[TEST_RETRY_DELAY_ENV];
 });
 
 afterEach(async () => {
   git.setLockRetryDelays(null);
-  git.setHelperTimeout(null);
   if (savedRetryDelay !== undefined) process.env[TEST_RETRY_DELAY_ENV] = savedRetryDelay;
   process.chdir(originalCwd);
   await cleanup(tmpDir);
@@ -258,12 +253,14 @@ describe("lock holder", () => {
     // A killed lsof prints nothing, which used to read as a stale lock and
     // told the user to rm a lock a live git still held (#129).
     const holder = holdOpen(indexLock);
+    const saved = process.env[git.TEST_HELPER_TIMEOUT_ENV];
     try {
-      git.setHelperTimeout(1);
+      process.env[git.TEST_HELPER_TIMEOUT_ENV] = "1";
       const found = await git.lockHolder(indexLock);
       expect(found).toEqual({ unknown: "lsof timed out" });
       expect(git.describeHolder(found)).toBe("unknown (lsof timed out)");
     } finally {
+      process.env[git.TEST_HELPER_TIMEOUT_ENV] = saved;
       holder.kill();
     }
   });

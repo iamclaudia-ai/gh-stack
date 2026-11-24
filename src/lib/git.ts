@@ -336,14 +336,21 @@ async function describeProcess(pid: string): Promise<string> {
 }
 
 const DEFAULT_HELPER_TIMEOUT_MS = 3000;
-let helperTimeoutMs = DEFAULT_HELPER_TIMEOUT_MS;
 
 /**
- * Change how long lsof and ps get before they're killed; `null` restores the
- * default. Tests raise it, since a loaded machine can take seconds (#129).
+ * Overrides how long lsof and ps get before they're killed, for tests only.
+ * The test preload raises it (a loaded machine can take longer than 3 s, and
+ * a killed lsof leaves the holder unknown), and CLIs the tests spawn inherit
+ * it, which a setter couldn't reach (#129). Same rules as
+ * GH_STACK_TEST_RETRY_DELAY_MS: a whole number of ms, read on every call.
  */
-export function setHelperTimeout(ms: number | null): void {
-  helperTimeoutMs = ms ?? DEFAULT_HELPER_TIMEOUT_MS;
+export const TEST_HELPER_TIMEOUT_ENV = "GH_STACK_TEST_HELPER_TIMEOUT_MS";
+
+function helperTimeoutMs(): number {
+  const override = process.env[TEST_HELPER_TIMEOUT_ENV];
+  return override !== undefined && /^\d+$/.test(override)
+    ? Number(override)
+    : DEFAULT_HELPER_TIMEOUT_MS;
 }
 
 /**
@@ -354,7 +361,7 @@ async function capture(
   cmd: string[],
 ): Promise<{ exitCode: number; stdout: string } | "timed out" | null> {
   try {
-    const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "ignore", timeout: helperTimeoutMs });
+    const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "ignore", timeout: helperTimeoutMs() });
     const stdout = await new Response(proc.stdout).text();
     const exitCode = await proc.exited;
     return proc.signalCode ? "timed out" : { exitCode, stdout };
