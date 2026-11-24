@@ -69,6 +69,8 @@ export interface GitResult {
   exitCode: number;
   stdout: string;
   stderr: string;
+  /** How many times git ran: more than 1 only when a held lock was retried. */
+  attempts: number;
 }
 
 // ── Per-run cache of git answers (#108) ────────────────────────────────────
@@ -248,6 +250,7 @@ async function retryLocks(
       exitCode: raw.exitCode,
       stdout: raw.stdout.toString(),
       stderr: raw.stderr.toString(),
+      attempts: attempt + 1,
     };
 
     const lock = result.exitCode === 0 ? null : heldLock(result.stderr);
@@ -292,8 +295,12 @@ async function retryLocks(
 // file open from taking the lock to committing it, so lsof sees any holder,
 // including tools that use libgit2 and never show up in git's own trace2 log.
 
-/** What lsof found: the holders, none (nobody has it open), or unknown (no lsof). */
-export type LockHolder = { holders: string[] } | { unknown: true };
+/**
+ * What lsof found: the holders, none (nobody has it open), or unknown (no
+ * lsof, or it didn't answer in time). Unknown never means "nobody": a lsof
+ * that timed out under load says nothing about the lock (#129).
+ */
+export type LockHolder = { holders: string[] } | { unknown: "lsof unavailable" | "lsof timed out" };
 
 /**
  * Who has `lock` open right now, best effort: each holder as
@@ -303,7 +310,8 @@ export async function lockHolder(lock: string): Promise<LockHolder> {
   const lsof = await capture(["lsof", "-t", "--", lock]);
   // lsof exits 1 both for "nobody has it open" and for errors; a missing
   // binary throws (null). A file that's already gone has no holder either.
-  if (lsof === null) return { unknown: true };
+  if (lsof === null) return { unknown: "lsof unavailable" };
+  if (lsof === "timed out") return { unknown: "lsof timed out" };
   const pids = lsof.stdout.split("\n").filter((p) => /^\d+$/.test(p.trim()));
   const holders: string[] = [];
   for (const pid of pids.slice(0, 3)) holders.push(await describeProcess(pid.trim()));
@@ -312,34 +320,59 @@ export async function lockHolder(lock: string): Promise<LockHolder> {
 
 /** "pid 123: <command> ← <parent> ← <grandparent>", from ps. */
 async function describeProcess(pid: string): Promise<string> {
-  const self = await capture(["ps", "-o", "ppid=,command=", "-p", pid]);
+  const self = await answer(capture(["ps", "-o", "ppid=,command=", "-p", pid]));
   const [ppid, ...command] = (self?.stdout.trim() ?? "").split(/\s+/);
   const chain: string[] = [];
   let parent = ppid;
   for (let i = 0; i < 3 && parent && parent !== "0" && parent !== "1"; i++) {
-    const p = await capture(["ps", "-o", "ppid=,comm=", "-p", parent]);
+    const p = await answer(capture(["ps", "-o", "ppid=,comm=", "-p", parent]));
     const [pp, ...comm] = (p?.stdout.trim() ?? "").split(/\s+/);
     if (!comm.length) break;
     chain.push(comm.join(" ").split("/").pop()!);
     parent = pp;
   }
-  const what = command.join(" ").slice(0, 80) || "(exited)";
+  const what = command.join(" ").slice(0, 80) || (self ? "(exited)" : "(ps didn't answer)");
   return [`pid ${pid}: ${what}`, ...chain].join(" ← ");
 }
 
-/** Run a helper binary (lsof, ps) with a time limit; null if it can't run. */
-async function capture(cmd: string[]): Promise<{ exitCode: number; stdout: string } | null> {
+const DEFAULT_HELPER_TIMEOUT_MS = 3000;
+let helperTimeoutMs = DEFAULT_HELPER_TIMEOUT_MS;
+
+/**
+ * Change how long lsof and ps get before they're killed; `null` restores the
+ * default. Tests raise it, since a loaded machine can take seconds (#129).
+ */
+export function setHelperTimeout(ms: number | null): void {
+  helperTimeoutMs = ms ?? DEFAULT_HELPER_TIMEOUT_MS;
+}
+
+/**
+ * Run a helper binary (lsof, ps) with a time limit: null if it can't run,
+ * "timed out" if it was killed at the limit (its output is then incomplete).
+ */
+async function capture(
+  cmd: string[],
+): Promise<{ exitCode: number; stdout: string } | "timed out" | null> {
   try {
-    const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "ignore", timeout: 3000 });
+    const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "ignore", timeout: helperTimeoutMs });
     const stdout = await new Response(proc.stdout).text();
-    return { exitCode: await proc.exited, stdout };
+    const exitCode = await proc.exited;
+    return proc.signalCode ? "timed out" : { exitCode, stdout };
   } catch {
     return null;
   }
 }
 
+/** A helper's answer, or null when it gave none (couldn't run, or timed out). */
+async function answer(
+  run: ReturnType<typeof capture>,
+): Promise<{ exitCode: number; stdout: string } | null> {
+  const result = await run;
+  return result === "timed out" ? null : result;
+}
+
 export function describeHolder(holder: LockHolder): string {
-  if ("unknown" in holder) return "unknown (lsof unavailable)";
+  if ("unknown" in holder) return `unknown (${holder.unknown})`;
   return holder.holders.length ? holder.holders.join("; ") : "nobody has it open";
 }
 

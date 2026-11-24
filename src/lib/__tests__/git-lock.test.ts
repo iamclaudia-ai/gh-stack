@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { $ } from "bun";
 import * as fs from "node:fs/promises";
+import { closeSync, openSync } from "node:fs";
 import * as git from "../git.ts";
 import { getBranchMembership, setBranchMembership } from "../branch-config.ts";
 import { cleanup, createTempRepo, makeCommit } from "../../__tests__/helpers.ts";
@@ -19,6 +20,9 @@ let indexLock: string;
 const FAST = [50, 100, 200, 400, 800];
 // For a lock that never frees, only the number of attempts matters.
 const GIVE_UP = [10, 10, 10, 10, 10];
+// lsof can take seconds on a loaded machine, past the 3 s default, and a
+// killed lsof leaves the holder unknown (#129). Within the 30 s test timeout.
+const HELPER_TIMEOUT = 20_000;
 let savedRetryDelay: string | undefined;
 
 beforeEach(async () => {
@@ -27,12 +31,14 @@ beforeEach(async () => {
   originalCwd = process.cwd();
   process.chdir(tmpDir);
   git.setLockRetryDelays(FAST);
+  git.setHelperTimeout(HELPER_TIMEOUT);
   savedRetryDelay = process.env[TEST_RETRY_DELAY_ENV];
   delete process.env[TEST_RETRY_DELAY_ENV];
 });
 
 afterEach(async () => {
   git.setLockRetryDelays(null);
+  git.setHelperTimeout(null);
   if (savedRetryDelay !== undefined) process.env[TEST_RETRY_DELAY_ENV] = savedRetryDelay;
   process.chdir(originalCwd);
   await cleanup(tmpDir);
@@ -102,11 +108,20 @@ describe("checkout", () => {
   });
 
   test("other failures aren't retried", async () => {
-    const started = Date.now();
-    const { ok, stderr } = await git.tryCheckout("no-such-branch");
-    expect(ok).toBe(false);
-    expect(stderr).toContain("no-such-branch");
-    expect(Date.now() - started).toBeLessThan(FAST[0]! * 2);
+    // Count the runs, not the time they took: one git spawn alone can take
+    // longer than a retry delay on a loaded machine (#129).
+    const result = await git.runGit(["checkout", "no-such-branch"]);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("no-such-branch");
+    expect(result.attempts).toBe(1);
+  });
+
+  test("a held lock is retried, and the attempts are counted", async () => {
+    await $`git branch side`.quiet();
+    await holdLock(indexLock, 250);
+    const result = await git.runGit(["checkout", "side"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.attempts).toBeGreaterThan(1);
   });
 });
 
@@ -202,12 +217,18 @@ describe("isCleanWorkingTree", () => {
 
 // #71: who holds the lock. Every wait is logged with the holder lsof found.
 describe("lock holder", () => {
-  /** A process that holds `file` open, as git holds a lock between taking and committing it. */
-  async function holdOpen(file: string): Promise<Bun.Subprocess> {
-    const proc = Bun.spawn(["sh", "-c", 'exec 3>"$1"; exec sleep 30', "sh", file]);
-    for (let i = 0; i < 100 && !(await Bun.file(file).exists()); i++) await Bun.sleep(10);
-    await Bun.sleep(50); // let `exec sleep` replace the shell
-    return proc;
+  /**
+   * A process that holds `file` open, as git holds a lock between taking and
+   * committing it. `sleep` gets the file as its stdout, so it holds it from
+   * the moment it starts: no shell that has yet to `exec` it (#129).
+   */
+  function holdOpen(file: string): Bun.Subprocess {
+    const fd = openSync(file, "w");
+    try {
+      return Bun.spawn(["sleep", "30"], { stdout: fd });
+    } finally {
+      closeSync(fd);
+    }
   }
 
   async function lockWaits(): Promise<Record<string, any>[]> {
@@ -219,7 +240,7 @@ describe("lock holder", () => {
   }
 
   test("lsof names the process holding the lock", async () => {
-    const holder = await holdOpen(indexLock);
+    const holder = holdOpen(indexLock);
     try {
       const found = await git.lockHolder(indexLock);
       expect("holders" in found && found.holders.join()).toContain(`pid ${holder.pid}: sleep 30`);
@@ -231,6 +252,20 @@ describe("lock holder", () => {
   test("nobody holding a leftover lock file", async () => {
     await Bun.write(indexLock, "");
     expect(await git.lockHolder(indexLock)).toEqual({ holders: [] });
+  });
+
+  test('lsof that times out is unknown, never "nobody has it open"', async () => {
+    // A killed lsof prints nothing, which used to read as a stale lock and
+    // told the user to rm a lock a live git still held (#129).
+    const holder = holdOpen(indexLock);
+    try {
+      git.setHelperTimeout(1);
+      const found = await git.lockHolder(indexLock);
+      expect(found).toEqual({ unknown: "lsof timed out" });
+      expect(git.describeHolder(found)).toBe("unknown (lsof timed out)");
+    } finally {
+      holder.kill();
+    }
   });
 
   test("a wait that recovers is logged", async () => {
@@ -263,7 +298,7 @@ describe("lock holder", () => {
   test("giving up on a held lock names the holder", async () => {
     git.setLockRetryDelays(GIVE_UP);
     await $`git branch side`.quiet();
-    const holder = await holdOpen(indexLock);
+    const holder = holdOpen(indexLock);
     try {
       const err = await git.checkout("side").catch((e) => e);
       expect(err).toBeInstanceOf(git.GitLockError);
