@@ -165,49 +165,6 @@ export async function selectStack(meta: StackMetadata, message: string): Promise
 }
 
 /**
- * Interactive parent branch selector.
- * Offers: branches in stack, "main", or custom input.
- */
-export async function selectParent(
-  stack: Stack | null,
-  currentBranch: string,
-): Promise<string | null> {
-  // In auto-yes mode, default to "main"
-  if (_autoYes) {
-    p.log.info("Auto-selecting parent: main (--yes mode)");
-    return "main";
-  }
-
-  const options: { value: string; label: string; hint?: string }[] = [
-    { value: "main", label: "main", hint: "Base branch" },
-  ];
-
-  // Add stack branches (if we have a stack)
-  if (stack) {
-    const ordered = getOrderedBranches(stack);
-    for (const name of ordered) {
-      if (name !== currentBranch) {
-        const branch = stack.branches[name]!;
-        const prNum = branch.pr ? `#${branch.pr}` : "";
-        options.push({
-          value: name,
-          label: name,
-          hint: [prNum, branch.description].filter(Boolean).join(" — "),
-        });
-      }
-    }
-  }
-
-  const result = await p.select({
-    message: `Select parent branch for ${pc.yellow(currentBranch)}`,
-    options,
-  });
-
-  if (p.isCancel(result)) return null;
-  return result as string;
-}
-
-/**
  * Confirm a destructive action.
  * In auto-yes mode, returns true immediately without prompting.
  */

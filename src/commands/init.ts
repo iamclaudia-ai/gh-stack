@@ -32,7 +32,8 @@ Best used from the TOP of your branch chain so all branches are found.
 OPTIONS
   --name <name>         Stack name (default: current branch name)
   --description <desc>  Stack description
-  --parent <branch>     Parent/trunk branch (default: main)
+  --parent <branch>     Parent/trunk branch (default: the repo's default
+                        branch from origin/HEAD, else main or master)
 
 EXAMPLES
   gh-stack init                              # Auto-detect chain, use defaults
@@ -64,7 +65,7 @@ export default async function init(args: string[]): Promise<void> {
   }
 
   const branch = await git.currentBranch();
-  const trunk = parentFlag || "main";
+  const trunk = parentFlag || (await git.trunkBranch());
 
   p.intro(pc.cyan("Create New Stack"));
 

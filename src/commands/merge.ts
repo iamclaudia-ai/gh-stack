@@ -394,14 +394,7 @@ OPTIONS
   // doesn't target main — merging it now would land it against the wrong base.
   // Re-root onto main first (after the parent stack merges).
   const base = stackBase(stack);
-  if (base !== "main" && base !== "master") {
-    p.cancel(
-      `${pc.yellow(stackName)} is based on ${pc.yellow(base)}, not main — can't merge yet.\n\n` +
-        `  Merge (or finish) the parent stack first, then re-root onto main:\n` +
-        `    ${pc.green("gh-stack restack --onto main")}`,
-    );
-    process.exit(1);
-  }
+  await refuseUnlessTrunkBased(stackName, base);
 
   // ── Determine the collapse range ──
   // Default: the whole stack. --approved: only the contiguous-from-base
@@ -467,7 +460,7 @@ OPTIONS
     const basePr = stack.branches[rangeOrdered[0]!]?.pr;
     if (collapse) {
       p.log.info(
-        `Nothing to collapse — the base PR${basePr ? ` (#${basePr})` : ""} already targets main.`,
+        `Nothing to collapse — the base PR${basePr ? ` (#${basePr})` : ""} already targets ${base}.`,
       );
       return;
     }
@@ -492,7 +485,7 @@ OPTIONS
     if (tail.length > 0 && !dryRun) {
       console.log();
       p.log.info(
-        `${tail.length} unapproved branch(es) left in place. After PR #${basePr} lands, run ${pc.green("gh-stack sync")} to re-root them onto main.`,
+        `${tail.length} unapproved branch(es) left in place. After PR #${basePr} lands, run ${pc.green("gh-stack sync")} to re-root them onto ${base}.`,
       );
     }
     return;
@@ -509,7 +502,9 @@ OPTIONS
   }
   if (collapse) {
     p.log.info(
-      pc.dim("--collapse: will stop after collapsing into base PR; base will NOT merge to main."),
+      pc.dim(
+        `--collapse: will stop after collapsing into base PR; base will NOT merge to ${base}.`,
+      ),
     );
   }
   console.log();
@@ -541,7 +536,7 @@ OPTIONS
     );
   } else {
     console.log(
-      `    ${pc.blue(baseBranch)}${basePr ? ` (#${basePr})` : ""} → ${pc.green("main")} (auto-merge)`,
+      `    ${pc.blue(baseBranch)}${basePr ? ` (#${basePr})` : ""} → ${pc.green(base)} (auto-merge)`,
     );
   }
   if (tail.length > 0) {
@@ -586,7 +581,7 @@ OPTIONS
     const childPrNum = stack.branches[childBranch]!.pr!;
     const parentBranch = stack.branches[childBranch]!.parent;
 
-    if (parentBranch === "main" || parentBranch === "master") continue;
+    if (parentBranch === base) continue;
 
     // Check if already merged (skip)
     const prState = await getPrMergeState(childPrNum);
@@ -640,7 +635,7 @@ OPTIONS
   // Every child is squashed into its parent now (this run or an earlier one).
   // Before the base goes anywhere, make sure it still holds their content (#28).
   if (!args.includes("--skip-collapse-check")) {
-    await ensureCollapseIntact(stack, rangeOrdered, baseBranch, basePr!);
+    await ensureCollapseIntact(stack, rangeOrdered, baseBranch, basePr!, base);
   }
 
   // -d: the squashed children can go now, except one an open PR still
@@ -649,7 +644,7 @@ OPTIONS
     await deleteMergedBranches(
       reversed.slice(0, -1).filter((b) => {
         const parent = stack.branches[b]!.parent;
-        return parent !== "main" && parent !== "master";
+        return parent !== base;
       }),
     );
   }
@@ -698,9 +693,7 @@ OPTIONS
       if ((await proc.exited) === 0 && out) baseUrl = out;
     } catch {}
 
-    console.log(
-      `  ${pc.blue("Base PR:")} #${basePr} ${pc.yellow(baseBranch)} → ${pc.green("main")}`,
-    );
+    console.log(`  ${pc.blue("Base PR:")} #${basePr} ${pc.yellow(baseBranch)} → ${pc.green(base)}`);
     if (baseUrl) console.log(`  ${pc.dim(baseUrl)}`);
     if (localBehind) {
       console.log();
@@ -714,7 +707,7 @@ OPTIONS
     console.log();
     console.log(`  ${pc.dim("Review the cumulative diff on GitHub. When ready to ship:")}`);
     console.log(
-      `    ${pc.green("gh-stack merge")}    ${pc.dim("# finishes base PR → main + archives")}`,
+      `    ${pc.green("gh-stack merge")}    ${pc.dim(`# finishes base PR → ${base} + archives`)}`,
     );
     console.log();
 
@@ -726,7 +719,7 @@ OPTIONS
   console.log();
   console.log(pc.cyan("━".repeat(40)));
   console.log(
-    `${pc.blue("Auto-merge:")} PR #${basePr} ${pc.yellow(baseBranch)} → ${pc.green("main")}`,
+    `${pc.blue("Auto-merge:")} PR #${basePr} ${pc.yellow(baseBranch)} → ${pc.green(base)}`,
   );
   console.log(pc.cyan("━".repeat(40)));
 
@@ -748,7 +741,7 @@ OPTIONS
     autoSpinner.stop(
       pc.red(
         verdict === "conflict"
-          ? `PR #${basePr} has merge conflicts with main`
+          ? `PR #${basePr} has merge conflicts with ${base}`
           : verdict === "closed"
             ? `PR #${basePr} is closed — not merging`
             : `Could not confirm PR #${basePr} is mergeable`,
@@ -757,11 +750,11 @@ OPTIONS
     console.log();
     if (verdict === "conflict") {
       p.log.error(
-        `${pc.yellow(baseBranch)} conflicts with ${pc.green("main")} — auto-merge would never fire.`,
+        `${pc.yellow(baseBranch)} conflicts with ${pc.green(base)} — auto-merge would never fire.`,
       );
       p.log.info("Resolve the conflict, then finish the merge:");
       console.log(
-        `    ${pc.green("gh-stack sync")}     ${pc.dim("# rebase the base onto main & resolve conflicts")}`,
+        `    ${pc.green("gh-stack sync")}     ${pc.dim(`# rebase the base onto ${base} & resolve conflicts`)}`,
       );
       if (rangeOrdered.length > 1) {
         // The collapsed branches are still in the stack; sync drops them
@@ -771,7 +764,7 @@ OPTIONS
         );
       }
       console.log(
-        `    ${pc.green("gh-stack merge")}    ${pc.dim("# finishes base PR → main + archives")}`,
+        `    ${pc.green("gh-stack merge")}    ${pc.dim(`# finishes base PR → ${base} + archives`)}`,
       );
     } else if (verdict === "pending") {
       p.log.warn(
@@ -813,7 +806,7 @@ OPTIONS
   // archive: the PR is either already merged or will merge once checks pass.
   let autoMerging = true;
   if (verdict === "merged") {
-    autoSpinner.stop(`PR #${basePr} already merged into main`);
+    autoSpinner.stop(`PR #${basePr} already merged into ${base}`);
   } else {
     autoSpinner.message(`Enabling auto-merge for PR #${basePr}...`);
     let auto = await enableAutoMerge();
@@ -826,7 +819,7 @@ OPTIONS
 
     if (auto.ok) {
       autoSpinner.stop(
-        `Auto-merge enabled for PR #${basePr} — will merge into main when CI passes`,
+        `Auto-merge enabled for PR #${basePr} — will merge into ${base} when CI passes`,
       );
     } else {
       autoSpinner.stop(pc.yellow(`Could not enable auto-merge for PR #${basePr}`));
@@ -836,22 +829,22 @@ OPTIONS
     }
   }
 
-  // Update local main and clean up
+  // Update the local trunk and clean up
   console.log();
   const pullSpinner = p.spinner();
   pullSpinner.start("Syncing local branches...");
-  // In a linked worktree, main is usually checked out by the main one, and
-  // git won't check it out twice: say where it is instead of failing (#81).
-  const mainHolder = await git.worktreeHolding("main").catch(() => null);
+  // In a linked worktree, the trunk is usually checked out by the main one,
+  // and git won't check it out twice: say where it is instead of failing (#81).
+  const trunkHolder = await git.worktreeHolding(base).catch(() => null);
   try {
     await git.runGitOrThrow(["fetch", "origin"]);
-    if (mainHolder) {
+    if (trunkHolder) {
       pullSpinner.stop(
-        `Fetched origin. main is checked out in the worktree at ${mainHolder.path}; update it there: ${pc.dim(`git -C ${git.shellQuote(mainHolder.path)} pull --ff-only`)}`,
+        `Fetched origin. ${base} is checked out in the worktree at ${trunkHolder.path}; update it there: ${pc.dim(`git -C ${git.shellQuote(trunkHolder.path)} pull --ff-only`)}`,
       );
     } else {
-      await git.checkout("main");
-      await git.runGitOrThrow(["pull", "origin", "main"]);
+      await git.checkout(base);
+      await git.runGitOrThrow(["pull", "origin", base]);
       pullSpinner.stop("Local branches synced");
     }
   } catch {
@@ -865,7 +858,7 @@ OPTIONS
   if (tail.length > 0) {
     p.outro(
       pc.green(
-        `Approved run collapsed into PR #${basePr}${autoMerging ? " → auto-merging to main" : ""}. ` +
+        `Approved run collapsed into PR #${basePr}${autoMerging ? ` → auto-merging to ${base}` : ""}. ` +
           `After it lands, run \`gh-stack sync\` to re-root the ${tail.length} remaining branch(es).`,
       ),
     );
@@ -901,6 +894,7 @@ async function ensureCollapseIntact(
   rangeOrdered: string[],
   baseBranch: string,
   basePr: number,
+  trunk: string,
 ): Promise<void> {
   const children: CollapsedChild[] = [];
   for (const branch of rangeOrdered) {
@@ -918,7 +912,7 @@ async function ensureCollapseIntact(
   const nwo = (await getRepoNwo()) ?? "{owner}/{repo}";
   const patchCommand = (sha: string) =>
     `gh api -H "Accept: application/vnd.github.patch" repos/${nwo}/commits/${sha} | git am`;
-  const trunkRef = `origin/${await git.trunkBranch()}`;
+  const trunkRef = `origin/${trunk}`;
 
   for (;;) {
     const s = p.spinner();
@@ -957,7 +951,7 @@ async function ensureCollapseIntact(
         `  ${pc.yellow(baseBranch)} was rewritten after the collapse (e.g. a restack or sync that never pulled the squash commit).`,
       );
       console.log(
-        `  Merging PR #${basePr} now would ship it without those PRs' changes. Nothing was merged to main.`,
+        `  Merging PR #${basePr} now would ship it without those PRs' changes. Nothing was merged to ${trunk}.`,
       );
       console.log();
       console.log(
@@ -1011,7 +1005,7 @@ async function ensureCollapseIntact(
 
     if (isAutoYes()) {
       p.cancel(
-        `Stopped before merging PR #${basePr}: its collapsed content is unverified, and --yes never merges on a guess. Nothing was merged to main.`,
+        `Stopped before merging PR #${basePr}: its collapsed content is unverified, and --yes never merges on a guess. Nothing was merged to ${trunk}.`,
       );
       process.exit(2);
     }
@@ -1028,7 +1022,7 @@ async function ensureCollapseIntact(
       ],
     });
     if (p.isCancel(choice) || choice === "stop") {
-      p.cancel(`Stopped before merging PR #${basePr}. Nothing was merged to main.`);
+      p.cancel(`Stopped before merging PR #${basePr}. Nothing was merged to ${trunk}.`);
       process.exit(2);
     }
     if (choice === "merge") return;
@@ -1089,6 +1083,21 @@ async function mergedRunAbove(stack: Stack, ordered: string[]): Promise<string[]
     run.push(branch);
   }
   return run;
+}
+
+/**
+ * Stop unless the stack is rooted on the trunk. A split stack's base PR
+ * targets a branch in another stack, so merging it would land it there.
+ */
+async function refuseUnlessTrunkBased(stackName: string, base: string): Promise<void> {
+  if (await git.isTrunk(base)) return;
+  const trunk = await git.trunkBranch();
+  p.cancel(
+    `${pc.yellow(stackName)} is based on ${pc.yellow(base)}, not ${trunk} — can't merge yet.\n\n` +
+      `  Merge (or finish) the parent stack first, then re-root onto ${trunk}:\n` +
+      `    ${pc.green(`gh-stack restack --onto ${trunk}`)}`,
+  );
+  process.exit(1);
 }
 
 /**
@@ -1174,14 +1183,7 @@ async function mergeBaseOnly(deleteFlag: boolean, dryRun: boolean, args: string[
 
   // Like top-down merge: a split stack rooted off another stack can't drain to
   // main until it's re-rooted. Require a trunk base.
-  if (base !== "main" && base !== "master") {
-    p.cancel(
-      `${pc.yellow(stackName)} is based on ${pc.yellow(base)}, not main — can't merge yet.\n\n` +
-        `  Merge (or finish) the parent stack first, then re-root onto main:\n` +
-        `    ${pc.green("gh-stack restack --onto main")}`,
-    );
-    process.exit(1);
-  }
+  await refuseUnlessTrunkBased(stackName, base);
   const trunk = base;
   const targetRef = `origin/${trunk}`;
   const push = resolveMergePush(args).value;
@@ -1295,7 +1297,7 @@ async function mergeBaseOnly(deleteFlag: boolean, dryRun: boolean, args: string[
     }
     collapsed = found.collapsed;
     if (collapsed.length > 0) {
-      await ensureCollapseIntact(stack, [baseBranch, ...collapsed], baseBranch, basePr);
+      await ensureCollapseIntact(stack, [baseBranch, ...collapsed], baseBranch, basePr, trunk);
     }
   }
 

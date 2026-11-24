@@ -86,7 +86,7 @@ Creates a stack from the current branch. If the branch sits on a chain of local 
 
 - `--name <name>`: stack name (default: the current branch)
 - `--description <desc>`: stack description
-- `--parent <branch>`: trunk branch (default: `main`)
+- `--parent <branch>`: trunk branch (default: the repo's default branch, from `origin/HEAD`; else `main` or `master`)
 
 #### `create`
 
@@ -202,7 +202,7 @@ On a conflict, resolve it, run `git rebase --continue`, then `gh-stack restack -
 gh-stack sync [--no-push | --push] [--resume | --fresh] [--overwrite-remote] [--dry-run]
 ```
 
-Fetches main, rebases the stack's bottom branch onto it, pushes, and restacks every branch above, all in one resumable run. Bottom PRs that already merged (on GitHub, or by `merge`) are dropped and the branches on them re-rooted onto main, so only their own commits replay. When a merged branch had several children, each becomes its own stack. Refuses on a dirty working tree.
+Fetches the stack's trunk (`main`, `master`, ...), rebases the stack's bottom branch onto it, pushes, and restacks every branch above, all in one resumable run. Bottom PRs that already merged (on GitHub, or by `merge`) are dropped and the branches on them re-rooted onto the trunk, so only their own commits replay. When a merged branch had several children, each becomes its own stack. Refuses on a dirty working tree.
 
 - `--no-push` / `--push`: as for restack. `--no-push` also leaves PR bases alone; the next `submit` pushes and retargets together.
 - `--resume`: same as `restack --resume`
@@ -409,7 +409,7 @@ Unknown keys print a warning. Malformed TOML, a non-boolean value or a bad env v
 
 ### Finding the Chain
 
-`init`, `add` and `submit` find a branch's chain by walking git ancestry: every local branch whose tip is an ancestor of it and not already on trunk (local `main` or `origin/main`). Two branches at the same commit can't be parent and child, so only one goes in the chain and the others are named in a warning.
+`init`, `add` and `submit` find a branch's chain by walking git ancestry: every local branch whose tip is an ancestor of it and not already on trunk (local `main` or `origin/main`). The trunk is the repo's default branch, from `origin/HEAD` (set by `git clone`; `git remote set-head origin -a` sets it otherwise), else `main` or `master`, whichever exists. Two branches at the same commit can't be parent and child, so only one goes in the chain and the others are named in a warning.
 
 ### Rebasing After a Parent Changes
 

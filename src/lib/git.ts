@@ -1230,10 +1230,10 @@ export async function commit(message: string): Promise<void> {
 }
 
 /**
- * Fetch origin main.
+ * Fetch the trunk (`main`, `master`, ...) from origin.
  */
-export async function fetchMain(): Promise<void> {
-  await runGitOrThrow(["fetch", "origin", "main"]);
+export async function fetchTrunk(trunk: string): Promise<void> {
+  await runGitOrThrow(["fetch", "origin", trunk]);
 }
 
 /**
@@ -1298,13 +1298,35 @@ export async function localBranchTips(): Promise<Map<string, string>> {
 }
 
 /**
- * Determine the trunk branch name. Prefers "main", falls back to "master"
- * if only that exists locally. Defaults to "main" when neither is present.
+ * The repo's trunk: the branch origin's HEAD names (the default branch on
+ * GitHub, set by `git clone`), else `main` or `master`, whichever exists
+ * locally or on origin, else "main". So a repo on `master` gets `master`,
+ * even with a stale local `main` beside it, when origin's HEAD is set (#134).
  */
 export async function trunkBranch(): Promise<string> {
-  if (await localBranchExists("main")) return "main";
-  if (await localBranchExists("master")) return "master";
-  return "main";
+  // ":" can't appear in a ref name, so this key never meets revParse's.
+  return cached("refs", ":trunk", async () => {
+    const { stdout, exitCode } = await $`git symbolic-ref --quiet refs/remotes/origin/HEAD`
+      .nothrow()
+      .quiet();
+    const head = stdout.toString().trim();
+    if (exitCode === 0 && head.startsWith("refs/remotes/origin/")) {
+      const name = head.slice("refs/remotes/origin/".length);
+      if (name) return name;
+    }
+    for (const name of ["main", "master"]) {
+      if (await localBranchExists(name)) return name;
+    }
+    for (const name of ["main", "master"]) {
+      if (await refExists(`refs/remotes/origin/${name}`)) return name;
+    }
+    return "main";
+  });
+}
+
+/** Whether `name` is a trunk: `main`, `master`, or this repo's trunk. */
+export async function isTrunk(name: string): Promise<boolean> {
+  return name === "main" || name === "master" || name === (await trunkBranch());
 }
 
 /**

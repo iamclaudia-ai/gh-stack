@@ -131,7 +131,9 @@ tip you hadn't submitted yet. (`submit` still auto-tracks too — `add` is just 
 no-publish path.)
 
 Branches already on `main` **or** `origin/main` are never adopted, so a stale
-local `main` in a worktree is fine. When two branches point at the same commit
+local `main` in a worktree is fine. The trunk is the repo's default branch
+(`origin/HEAD`), so a repo on `master` roots on `master`; if `origin/HEAD` isn't
+set, `git remote set-head origin -a` sets it. When two branches point at the same commit
 (a backup, a review checkout of a stack branch), only one goes in the chain and
 the warning "Left out of the stack" names the others. Check it picked the right
 one with `gh-stack stacks --json`.
@@ -379,7 +381,8 @@ detects it, drops every merged branch, and re-roots each unmerged branch sitting
 on them onto trunk instead of replaying squashed commits and conflicting. A
 merged branch with several children (the dependency sweep's batch PR with one
 breaking PR per upgrade) leaves one stack per child, and sync syncs each. It rebases
-onto `origin/main` (fetched itself), so a stale local `main` doesn't matter.
+onto `origin/<trunk>` (the stack's base, fetched itself), so a stale local
+trunk doesn't matter.
 
 **`merge` stopped with "conflicts with main" after collapsing:** run
 `gh-stack sync`, as it says. Sync drops the branches already squashed into the
