@@ -1223,7 +1223,7 @@ export async function syncChain(
     p.log.info(`Rebasing ${pc.yellow(root)} onto ${trunkRef}...`);
     const rewrite = await git.rebaseBranch(root, trunkRef, null);
     if (!rewrite.ok) conflictStop(rewrite);
-    p.log.success("Base branch rebased onto main");
+    p.log.success(`Base branch rebased onto ${trunkRef}`);
     await finishRebase(root, trunkRef, ctx, rewrite);
   }
 

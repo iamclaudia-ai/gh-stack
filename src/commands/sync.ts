@@ -52,8 +52,8 @@ gh-stack sync — Sync base with main + restack all
 USAGE
   gh-stack sync [--dry-run] [--no-push | --push] [--fresh]
 
-Fetches latest main, rebases the base branch onto main,
-then restacks all children. Equivalent to running restack
+Fetches the stack's trunk (main, master, ...), rebases the base
+branch onto it, then restacks all children. Equivalent to running restack
 with the base branch included.
 
 OPTIONS
@@ -224,9 +224,9 @@ adds on GitHub). Pull or cherry-pick them first; see \`gh-stack restack --help\`
   if (dryRun) {
     p.log.warn("[DRY RUN] No changes will be made");
     p.log.info("Planned operations:");
-    console.log(`  ${pc.yellow("1.")} Fetch latest ${pc.cyan("origin/main")}`);
+    console.log(`  ${pc.yellow("1.")} Fetch latest ${pc.cyan(`origin/${base}`)}`);
     console.log(
-      `  ${pc.yellow("2.")} Rebase ${pc.yellow(baseBranch)} onto ${pc.cyan("origin/main")}`,
+      `  ${pc.yellow("2.")} Rebase ${pc.yellow(baseBranch)} onto ${pc.cyan(`origin/${base}`)}`,
     );
 
     const children = ordered.slice(1);
@@ -243,11 +243,11 @@ adds on GitHub). Pull or cherry-pick them first; see \`gh-stack restack --help\`
     return;
   }
 
-  // Fetch main
+  // Fetch the trunk the stack is rooted on (main, master, ...)
   const fetchSpinner = p.spinner();
-  fetchSpinner.start("Fetching latest main...");
-  await git.fetchMain();
-  fetchSpinner.stop("Fetched latest main");
+  fetchSpinner.start(`Fetching latest ${base}...`);
+  await git.fetchTrunk(base);
+  fetchSpinner.stop(`Fetched latest ${base}`);
 
   // Take snapshot BEFORE rebasing. This records every branch's pre-rebase
   // tip — including the orphaned base-branch tip that restack will later
@@ -261,9 +261,9 @@ adds on GitHub). Pull or cherry-pick them first; see \`gh-stack restack --help\`
     );
   }
 
-  // Rebase the root onto main, push it, then restack every branch above it —
+  // Rebase the root onto the trunk, push it, then restack every branch above it —
   // one run, saved after every step, so `restack --resume` can finish it.
-  await syncChain(meta, stackName, ordered, { trunkRef: "origin/main", push, verified });
+  await syncChain(meta, stackName, ordered, { trunkRef: `origin/${base}`, push, verified });
 
   // Stacks split off by the advance are already re-rooted onto the trunk, but
   // the branches above their roots still sit on the old roots (#60).
@@ -272,7 +272,7 @@ adds on GitHub). Pull or cherry-pick them first; see \`gh-stack restack --help\`
     if (!splitStack) continue;
     await takeSnapshot(meta, name, "sync");
     await syncChain(meta, name, getOrderedBranches(splitStack), {
-      trunkRef: "origin/main",
+      trunkRef: `origin/${base}`,
       push,
       verified,
     });
@@ -309,16 +309,20 @@ async function syncPreconditions(
     process.exit(1);
   }
 
-  // sync only makes sense for trunk-rooted stacks — it fetches main and
+  // sync only makes sense for trunk-rooted stacks — it fetches the trunk and
   // rebases onto it. A split stack is rooted on a branch in another stack, so
   // syncing it means restacking onto that base (handled by `restack`), or
-  // re-rooting onto main once the parent stack has merged.
+  // re-rooting onto the trunk once the parent stack has merged.
   const base = stackBase(stack);
-  if (base !== "main" && base !== "master") {
+  if (!(await git.isTrunk(base))) {
+    const trunk = await git.trunkBranch();
+    const moved = "Parent moved? Restack onto it:";
+    const merged = `Parent stack merged to ${trunk}?`;
+    const width = Math.max(moved.length, merged.length) + 3;
     p.cancel(
-      `${pc.yellow(stackName)} is based on ${pc.yellow(base)}, not main — sync doesn't apply.\n\n` +
-        `  • Parent moved? Restack onto it:   ${pc.green("gh-stack restack")}\n` +
-        `  • Parent stack merged to main?     ${pc.green("gh-stack restack --onto main")}`,
+      `${pc.yellow(stackName)} is based on ${pc.yellow(base)}, not ${trunk} — sync doesn't apply.\n\n` +
+        `  • ${moved.padEnd(width)}${pc.green("gh-stack restack")}\n` +
+        `  • ${merged.padEnd(width)}${pc.green(`gh-stack restack --onto ${trunk}`)}`,
     );
     process.exit(1);
   }

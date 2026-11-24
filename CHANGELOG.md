@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### 🐛 Fixes
+- **Repos whose trunk is `master` work.** `init` rooted every stack on `main`, so in a repo on `master` it adopted unrelated branches (a stale `develop`) into the chain, and `sync` always ran `git fetch origin main`, failing with "couldn't find remote ref main" even on a stack based on `master`. The trunk is now the repo's default branch, read from `origin/HEAD`, else `main` or `master`, whichever exists. `sync` fetches and rebases onto the stack's own base, and `merge` updates that branch locally, not `main`. (#134)
+
 ## 0.19.31
 
 ### 🐛 Fixes
