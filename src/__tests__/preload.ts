@@ -128,9 +128,10 @@ delete process.env.GH_ENTERPRISE_TOKEN;
 // Most tests drive real git (temp repos, a bare remote, rebases, pushes), and
 // a few run two restacks. Bun's 5 s default fails them on a loaded machine,
 // e.g. under the pre-push hook while other work runs. bunfig.toml has no
-// timeout setting Bun reads. Bun scopes setDefaultTimeout to a file, so this
-// one covers only the first file a test process runs: `bun test <path>` for a
-// single file. The suite (`bun run test`, several files per worker) gets 30 s
-// from `--timeout=30000` in package.json, which reaches every file (#129).
-// Files and tests that set their own still win.
+// timeout setting Bun reads. Bun scopes setDefaultTimeout to a file. Parallel
+// workers (`bun run test`) run with --isolate, which runs this preload again
+// for every file, but a serial `bun test a b` runs it once, so files after the
+// first get Bun's 5 s. The scripts' `--timeout=30000` covers both (#129); this
+// call covers a single `bun test <path>`. Files and tests that set their own
+// still win.
 setDefaultTimeout(30_000);

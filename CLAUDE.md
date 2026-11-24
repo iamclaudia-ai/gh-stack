@@ -77,11 +77,11 @@ files one at a time (~6 min), and bunfig.toml has no setting for `--parallel`.
 and with 16 workers they contend in the kernel. Run a single file with
 `bun test <path>` as usual.
 
-The test timeout is 30 s, but Bun scopes `setDefaultTimeout` to a file: the
-preload's call covers only the first file a process runs. `bun run test` passes
-`--timeout=30000`, which reaches every file. Running several files by hand,
-pass it too (`bun test --timeout=30000 a.test.ts b.test.ts`), or every file
-after the first gets Bun's 5 s default and fails under load (#129).
+The test timeout is 30 s, but Bun scopes `setDefaultTimeout` to a file.
+`bun run test`'s parallel workers run the preload for each file (`--isolate`),
+but a serial `bun test a.test.ts b.test.ts` runs it once, and every file after
+the first gets Bun's 5 s default, which fails under load. Pass `--timeout=30000`
+when running several files by hand; the scripts already do (#129).
 
 `bun run test` passes `--timings=test-timings.json`, so the parallel run starts
 the slowest files first. Without it, Bun hands files out in discovery order, and
