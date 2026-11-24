@@ -78,12 +78,16 @@ export async function detectChain(currentBranch: string, trunk: string): Promise
   // Branches to exclude: current, trunk, and always main/master
   const excluded = new Set([currentBranch, trunk, "main", "master"]);
 
+  // A branch is a candidate when its tip is in the current branch's history
+  // and not on trunk: exactly the commits rev-list gives for current --not
+  // trunks. One git call for all of them; a check per branch took minutes in
+  // a repo with 1,261 local branches on a loaded machine (#130).
+  const own = await git.commitsNotOn(currentBranch, trunks);
+
   // Candidate ancestors, grouped by tip commit.
   const byTip = new Map<string, { names: string[]; distance: number }>();
   for (const [branch, sha] of tips) {
-    if (excluded.has(branch)) continue;
-    if (!(await git.isAncestor(branch, currentBranch))) continue;
-    if (await onTrunk(branch, trunks)) continue;
+    if (excluded.has(branch) || !own.has(sha)) continue;
     const group = byTip.get(sha);
     if (group) {
       group.names.push(branch);

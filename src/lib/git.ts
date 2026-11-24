@@ -1272,6 +1272,20 @@ export async function fetchTrunk(trunk: string): Promise<void> {
 /**
  * Get count of commits between two refs.
  */
+/**
+ * The commits `ref` can reach that none of `exclude` can, as a set of SHAs:
+ * one git call, however many branch tips the caller then looks up in it
+ * (#130). Refs that don't exist are left out of `exclude`; empty when `ref`
+ * itself is missing.
+ */
+export async function commitsNotOn(ref: string, exclude: string[]): Promise<Set<string>> {
+  const { exitCode, stdout } = await $`git rev-list --ignore-missing ${ref} --not ${exclude}`
+    .nothrow()
+    .quiet();
+  if (exitCode !== 0) return new Set();
+  return new Set(stdout.toString().split("\n").filter(Boolean));
+}
+
 export async function commitCount(from: string, to: string): Promise<number> {
   try {
     const result = await $`git rev-list --count ${from}..${to}`.text();
