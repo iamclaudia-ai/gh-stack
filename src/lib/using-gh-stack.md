@@ -379,8 +379,8 @@ deletes them from the PR.
 the base of a `merge --approved` landed with the PRs collapsed into it, `sync`
 detects it, drops every merged branch, and re-roots each unmerged branch sitting
 on them onto trunk instead of replaying squashed commits and conflicting. A
-merged branch with several children (the dependency sweep's batch PR with one
-breaking PR per upgrade) leaves one stack per child, and sync syncs each. It rebases
+merged branch with several children (say, a batch PR with a stacked PR for each
+breaking upgrade) leaves one stack per child, and sync syncs each. It rebases
 onto `origin/<trunk>` (the stack's base, fetched itself), so a stale local
 trunk doesn't matter.
 
