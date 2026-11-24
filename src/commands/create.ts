@@ -30,8 +30,8 @@ OPTIONS
   --description <desc>  Description for the branch
 
 EXAMPLES
-  gh-stack create kiliman/feature-2          # Branch off current, add to stack
-  gh-stack create kiliman/api --description "API layer"
+  gh-stack create you/feature-2          # Branch off current, add to stack
+  gh-stack create you/api --description "API layer"
 `);
         return;
       default:

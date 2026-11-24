@@ -48,6 +48,14 @@ describe("learn (stdout)", () => {
     expect(stdout).not.toContain("gh-stack-metadata.json\n```"); // no stale v2 schema block
   });
 
+  test("its examples use placeholder branch names, not the author's (#125)", async () => {
+    // The skill is installed into other people's repos, and an agent may copy
+    // an example's prefix into real branch names.
+    const { stdout } = await runCli(["learn"]);
+    expect(stdout).toContain("you/first-ABC-101");
+    expect(stdout).not.toMatch(/kiliman|WEB-\d/);
+  });
+
   test("does not install anything in plain stdout mode", async () => {
     await runCli(["learn"]);
     expect(await Bun.file(join(tmpDir, ".claude/skills/using-gh-stack/SKILL.md")).exists()).toBe(

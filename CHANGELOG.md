@@ -8,6 +8,9 @@
 ### 🧪 Tests
 - **The lock tests no longer depend on machine speed.** "Other failures aren't retried" counted the time one `git checkout` took, which passed 100 ms under load; it now counts the attempts (`GitResult.attempts`). The lsof tests give lsof and ps 20 seconds, and the process holding the lock is `sleep` itself from the start, not a shell that has yet to `exec` it. (#129)
 
+### 📚 Docs
+- **The skill `gh-stack learn` installs uses placeholder branch names in its examples** (`you/first-ABC-101`), not the author's own prefix, which an agent reading the skill in another repo could copy into real branch names. The `submit` example's PR title and body are generic too, and so are `gh-stack create --help`'s examples. (#125)
+
 ## 0.19.32
 
 ### 🐛 Fixes
