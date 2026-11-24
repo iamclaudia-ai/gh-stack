@@ -2,6 +2,7 @@
 // without pushing or opening a PR. Resolves the catch-22 where a local WIP tip
 // couldn't be sync'd/restacked because the only way into a stack was `submit`.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { $ } from "bun";
 import { checkout, cleanup, createLinearStack, createTempRepo, makeCommit } from "./helpers.ts";
 
 let tmpDir: string;
@@ -16,10 +17,10 @@ afterEach(async () => {
 
 const cliPath = new URL("../index.ts", import.meta.url).pathname;
 
-async function runCli(args: string[]) {
+async function runCli(args: string[], env: Record<string, string> = {}) {
   const proc = Bun.spawn(["bun", "run", cliPath, ...args], {
     cwd: tmpDir,
-    env: { ...process.env, NO_COLOR: "1", GH_STACK_NO_COLOR: "1" },
+    env: { ...process.env, NO_COLOR: "1", GH_STACK_NO_COLOR: "1", ...env },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -104,5 +105,31 @@ describe("gh-stack add", () => {
     const res = await runCli(["sync"]);
     expect(res.exitCode).not.toBe(0);
     expect(res.stdout + res.stderr).toContain("gh-stack add");
+  });
+});
+
+describe("gh-stack add in a repo with many branches (#130)", () => {
+  // Chain detection used to run git once or twice per local branch. With
+  // 1,261 branches (nutwords) that was 45 s, and minutes on a loaded machine,
+  // with no output. Count git's runs, not the time they take.
+  test("checks the branches' ancestry in a constant number of git runs", async () => {
+    // 60 branches at main (trunk history), and a chain a → b above main.
+    const refs = Array.from({ length: 60 }, (_, i) => `create refs/heads/old-${i} main\n`).join("");
+    await $`git update-ref --stdin < ${new Response(refs)}`.cwd(tmpDir).quiet();
+    await $`git checkout -q -b a`.cwd(tmpDir).quiet();
+    await makeCommit(tmpDir, "a.txt", "a\n", "a");
+    await $`git checkout -q -b b`.cwd(tmpDir).quiet();
+    await makeCommit(tmpDir, "b.txt", "b\n", "b");
+
+    const trace = `${tmpDir}/.git/trace.log`;
+    const res = await runCli(["add", "b"], { GIT_TRACE: trace });
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("+ a");
+    expect(res.stdout).toContain("+ b");
+
+    const ancestry = (await Bun.file(trace).text())
+      .split("\n")
+      .filter((l) => /built-in: git (merge-base|rev-list)/.test(l));
+    expect(ancestry.length).toBeLessThan(10);
   });
 });

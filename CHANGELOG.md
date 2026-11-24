@@ -4,6 +4,8 @@
 
 ### 🐛 Fixes
 - **A lock gh-stack gave up on is no longer called stale when lsof just didn't answer in time.** lsof gets 3 seconds; on a loaded machine it can take longer, and when it was killed its empty output read as "No process has it open, so it's stale; remove it: rm …", advice that deletes a lock a live git process still holds. A timed-out lsof now reports the holder as unknown (`unknown (lsof timed out)` in `lock-waits.log`), and gh-stack says to remove the lock only if no other git process is running. (#129)
+- **`add`, `init`, `submit` and `log` (on an untracked branch) no longer stall in repos with many local branches.** Finding a branch's chain ran git once or twice for every local branch, to ask whether it was below the branch and not on trunk. In a repo with 1,261 local branches that took 45 seconds, and minutes on a busy machine, with nothing printed meanwhile, so `gh-stack add <branch>` looked hung. One `git rev-list` now answers it for every branch at once: 86 ms in the same repo. (#130)
+- **A branch named like a file or directory in the repo (`docs`, `scripts`) keeps its restack boundary.** `restack` asked `git rev-list` about it without `--`, git refused the name as ambiguous, and the boundary from the parent's reflog was silently skipped for the merge-base fallback. Found in review of #130. (#139)
 
 ### 🧪 Tests
 - **The lock tests no longer depend on machine speed.** "Other failures aren't retried" counted the time one `git checkout` took, which passed 100 ms under load; it now counts the attempts (`GitResult.attempts`). The lsof tests give lsof and ps 20 seconds, and the process holding the lock is `sleep` itself from the start, not a shell that has yet to `exec` it. (#129)
