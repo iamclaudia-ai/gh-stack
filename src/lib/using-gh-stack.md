@@ -99,11 +99,11 @@ gh-stack init            # detects main → feat-1 → feat-2, adopts existing P
 **From scratch:**
 
 ```bash
-git checkout -b kiliman/first-WEB-1234
-gh-stack init                              # create stack, add current branch
-gh-stack create kiliman/second-WEB-5678    # new branch stacked on top
+git checkout -b you/first-ABC-101
+gh-stack init                          # create stack, add current branch
+gh-stack create you/second-ABC-102     # new branch stacked on top
 # ...work, commit...
-gh-stack create kiliman/third-WEB-9012     # stack another
+gh-stack create you/third-ABC-103      # stack another
 ```
 
 `init` options: `--name <stack>`, `--parent <trunk>`, `--description <text>`.
@@ -203,13 +203,13 @@ gh-stack submit -n                    # auto-generate titles (generic — avoid)
 
 ```bash
 gh-stack submit \
-  -t "Store raw transcription JSON and WebVTT [WEB-7409]" \
+  -t "Retry failed uploads with backoff [ABC-104]" \
   -b "$(cat <<'EOF'
 ## Summary
-- Store raw transcription JSON alongside pre-rendered WebVTT
+- Retry a failed upload up to 3 times, backing off between attempts
 
 ## Test plan
-- [ ] Verify both formats persist
+- [ ] An upload that fails twice, then succeeds, is stored once
 EOF
 )"
 ```

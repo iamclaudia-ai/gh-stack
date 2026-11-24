@@ -1,7 +1,7 @@
 // gh-stack rename — Rename a tracked branch and keep metadata in sync.
 //
-// The common flow: build on a throwaway branch (`kiliman/feature-wip`), then
-// rename it to a ticketed convention (`kiliman/feature-BEE-1234`) before
+// The common flow: build on a throwaway branch (`you/feature-wip`), then
+// rename it to a ticketed convention (`you/feature-ABC-123`) before
 // submitting. `git branch -m` moves the branch's rename-proof config section,
 // and gh-stack reconciles the name-keyed topology files on the next read — this
 // command is just the discoverable front door that does both and persists
