@@ -90,6 +90,7 @@ describe("git env isolation", () => {
         GH_STACK_DRAFT: "1",
         GH_STACK_NO_PUSH: "1",
         GH_STACK_TEST_RETRY_DELAY_MS: "5000",
+        GH_STACK_TEST_HELPER_TIMEOUT_MS: "1",
       },
       stdout: "pipe",
       stderr: "pipe",
