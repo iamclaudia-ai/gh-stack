@@ -52,8 +52,8 @@ gh-stack sync — Sync base with main + restack all
 USAGE
   gh-stack sync [--dry-run] [--no-push | --push] [--fresh]
 
-Fetches latest main, rebases the base branch onto main,
-then restacks all children. Equivalent to running restack
+Fetches the stack's trunk (main, master, ...), rebases the base
+branch onto it, then restacks all children. Equivalent to running restack
 with the base branch included.
 
 OPTIONS
