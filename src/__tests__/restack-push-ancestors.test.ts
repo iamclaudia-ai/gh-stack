@@ -4,7 +4,13 @@
 // own chain, never gets past them.
 import { describe, expect, test } from "bun:test";
 import { $ } from "bun";
-import { checkout, createLinearStack, makeCommit, pushAllBranches } from "./helpers.ts";
+import {
+  checkout,
+  createBranch,
+  createLinearStack,
+  makeCommit,
+  pushAllBranches,
+} from "./helpers.ts";
 import {
   addRemote,
   rejectRef,
@@ -45,7 +51,7 @@ describe("restack pushes the branches below the one it runs from (#126)", () => 
     await allOnOrigin();
     const order = ["pr1", "pr2", "pr3"].map((b) => res.out.indexOf(`Pushed ${b}`));
     expect(order.every((i) => i >= 0)).toBe(true);
-    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(order.toSorted((a, b) => a - b)).toEqual(order);
     // Nothing left pending for a later resume to stumble over.
     expect((await savedState())?.finished_at).toBeTruthy();
   });
@@ -129,6 +135,46 @@ describe("restack pushes the branches below the one it runs from (#126)", () => 
     expect(res.exitCode).toBe(0);
     expect(res.out).not.toContain("Origin lags behind");
     expect(await remoteSha("pr1")).toBe(before);
+  });
+
+  /**
+   * main → pr1 → pr2 → pr3 on origin; then origin's pr1 gets a teammate's commit
+   * (never in local pr1's reflog) and local pr1 one of ours: diverged. pr2 still
+   * matches origin, and pr3 gains a commit.
+   */
+  async function divergedBelow(): Promise<string> {
+    await createLinearStack(tmpDir);
+    await addRemote();
+    await pushAllBranches(tmpDir);
+    await createBranch(tmpDir, "teammate", "pr1");
+    await makeCommit(tmpDir, "theirs.txt", "theirs\n", "their commit on pr1");
+    await $`git -C ${tmpDir} push -q origin teammate:refs/heads/pr1`.quiet();
+    await checkout(tmpDir, "pr1");
+    await makeCommit(tmpDir, "ours.txt", "ours\n", "our commit on pr1");
+    await checkout(tmpDir, "pr3");
+    await makeCommit(tmpDir, "pr3-more.txt", "more\n", "more on pr3");
+    return remoteSha("pr1");
+  }
+
+  test("--no-push doesn't check origin's copies of the branches below", async () => {
+    const theirs = await divergedBelow();
+
+    const res = await runCli(["restack", "--no-push"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(res.out).not.toContain("Origin has commits");
+    expect(await remoteSha("pr1")).toBe(theirs);
+  });
+
+  test("a branch below with commits only on origin is named and skipped; the run goes on", async () => {
+    const theirs = await divergedBelow();
+
+    const res = await runCli(["restack", "--push"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(res.out).toContain("Not pushing pr1 (origin has commits it lacks), below pr3");
+    expect(await remoteSha("pr1")).toBe(theirs);
+    expect(await remoteSha("pr3")).toBe(await sha("pr3"));
   });
 
   test("a branch below that's behind origin isn't pushed backwards", async () => {

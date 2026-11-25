@@ -27,7 +27,7 @@ import {
   ensureWorktreesReady,
 } from "../lib/safety.ts";
 import { takeSnapshot, resolveRestackBoundary, findRecordedBaseTip } from "../lib/snapshot.ts";
-import { guardRemoteContent, wasLocalTip } from "../lib/remote-guard.ts";
+import { findRemoteOnlyContent, guardRemoteContent, wasLocalTip } from "../lib/remote-guard.ts";
 import { setPrBase } from "../lib/github.ts";
 import { confirmAction, isAutoYes } from "../lib/ui.ts";
 import { describeSource, flagSetting, resolveFlag, type Resolved } from "../lib/config.ts";
@@ -855,10 +855,10 @@ async function handleResume(
   // Branches below the chain that origin still lags behind are pushed first
   // (#126), whether the run pushed them before it stopped or not.
   const stack = meta.stacks[state.stack_name]!;
-  const below = await unpublishedAncestors(stack, state.chain[0]!, ctx);
+  const below = await branchesToPushBelow(meta, stack, state.chain[0]!, ctx);
 
   // Origin may have moved while the run was stopped.
-  await guardRemote(meta, [...below, ...state.chain], ctx.dryRun);
+  await guardRemote(meta, state.chain, ctx.dryRun);
 
   // A dry run reads the state but never writes it: `run` stays null, so
   // nothing below records or saves.
@@ -985,11 +985,10 @@ async function handleFreshRestack(
     }
   }
 
-  const below = await unpublishedAncestors(stack, currentBranch, ctx);
+  const below = await branchesToPushBelow(meta, stack, currentBranch, ctx);
 
-  // The base branches, and the ones below, are force-pushed too, so they're
-  // checked with the rest.
-  await guardRemote(meta, [...below, ...chain], ctx.dryRun);
+  // The base branches are force-pushed too, so they're checked with the rest.
+  await guardRemote(meta, chain, ctx.dryRun);
 
   if (!ctx.dryRun) {
     await ensureWorktreesReady(toRebase, "gh-stack restack");
@@ -1518,6 +1517,41 @@ async function unpublishedAncestors(
 }
 
 /**
+ * The branches below `start` this run pushes first (#126): none under
+ * --no-push, and none whose origin copy has commits local lacks (or couldn't
+ * be checked). Those are named and left alone rather than stopping the run, as
+ * the remote guard would: the run never needed them, and a branch above that
+ * sits on one is held back by `unpublishedParent` as before.
+ */
+async function branchesToPushBelow(
+  meta: StackMetadata,
+  stack: Stack,
+  start: string,
+  ctx: ChainContext,
+): Promise<string[]> {
+  if (noPush) return [];
+  const lagging = await unpublishedAncestors(stack, start, ctx);
+  if (lagging.length === 0) return [];
+  const { found, cleared, unverified } = await findRemoteOnlyContent(
+    (await readMetadata()) ?? meta,
+    lagging,
+  );
+  const blocked = [
+    ...found.map((f) => `${pc.yellow(f.branch)} (origin has commits it lacks)`),
+    ...unverified.map((u) => `${pc.yellow(u.branch)} (origin's copy couldn't be checked)`),
+  ];
+  if (blocked.length > 0) {
+    p.log.warn(
+      `Not pushing ${blocked.join(", ")}, below ${start}. Bring origin's commits in first (\`git pull\` there), then restack; a branch sitting on ${blocked.length === 1 ? "it" : "one"} isn't pushed until then.`,
+    );
+  }
+  const skip = new Set([...found.map((f) => f.branch), ...unverified.map((u) => u.branch)]);
+  // Checked like the guard checks the chain: an explicit lease on that tip.
+  for (const [branch, sha] of cleared) verifiedTips.set(branch, sha);
+  return lagging.filter((b) => !skip.has(b));
+}
+
+/**
  * Push the branches below a run's chain that origin lags behind (#126),
  * parents first, ahead of the chain's own pushes. They stay out of the run's
  * chain: a resume works them out again from the stack as it is then (one
@@ -1531,10 +1565,12 @@ async function pushBelow(
   below: string[],
   ctx: ChainContext,
 ): Promise<void> {
-  if (below.length === 0 || noPush) return;
+  if (below.length === 0) return;
   const names = below.map((b) => pc.yellow(b)).join(", ");
   if (ctx.dryRun) {
-    p.log.warn(`[DRY RUN] Would push ${names} first: origin lags behind them, below ${start}`);
+    p.log.warn(
+      `[DRY RUN] Would push ${names} first: origin lags behind ${below.length === 1 ? "it" : "them"}, below ${start}`,
+    );
     return;
   }
   p.log.info(
