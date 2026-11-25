@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.19.39
 
 ### 🐛 Fixes
 - **`join` moves the incoming PR to its new base before pushing the branch, so the trunk's required checks count.** Joined as the new bottom of a stack on `main`, the incoming branch was pushed first and its PR retargeted after, so the push's CI ran against the PR's old base and a required check on `main` stayed "Expected — Waiting for status to be reported" (the order #133 fixed for `merge --base`, `sync`, `restack` and `submit`). The PR now moves right before the push, and back if the push is rejected; a PR already on its new base isn't edited. Children's PRs still move after the push, onto the pushed incoming branch. (#148)
