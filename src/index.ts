@@ -190,7 +190,7 @@ ${bold("STACK NAVIGATION")}
   ${green("checkout")}       Switch to a branch or stack ${dim("(alias: co)")}
   ${green("up")}             Move to child branch (upstack)
   ${green("down")}           Move to parent branch (downstack)
-  ${green("top")}            Jump to the tip of the stack
+  ${green("top")}            Jump to the tip above the current branch
   ${green("bottom")}         Jump to the base of the stack
   ${green("ls")}             List branches with numbers ${dim("(alias: list)")}
   ${green("stacks")}         List all stacks (--json for tools)

@@ -1,4 +1,4 @@
-// gh-stack top — Jump to the tip of the stack
+// gh-stack top — Jump to the tip above the current branch
 import * as p from "../lib/output.ts";
 import pc from "picocolors";
 import * as git from "../lib/git.ts";
@@ -15,7 +15,7 @@ import { chooseBranch } from "../lib/ui.ts";
 export default async function top(args: string[]): Promise<void> {
   if (args.includes("--help")) {
     console.log(`
-gh-stack top — Jump to the tip of the stack
+gh-stack top — Jump to the tip above the current branch
 
 USAGE
   gh-stack top
