@@ -249,6 +249,76 @@ describe("gh-stack delete, the children's PRs", () => {
     expect(await prBase(200)).toBe("feat/mid");
     expect(await refExists(remoteDir, "refs/heads/feat/mid")).toBe(true);
   });
+
+  test("a PR moved onto a branch with a slash in its name records that base (#171)", async () => {
+    // leaf (PR #145) on child: deleting child moves #145 onto feat/mid.
+    await createBranch(tmpDir, "leaf", "child");
+    await makeCommit(tmpDir, "leaf.txt", "leaf\n", "leaf: commit");
+    await $`git -C ${tmpDir} checkout -q main`.quiet();
+    await $`git -C ${tmpDir} push -q --no-verify origin leaf`.quiet();
+    await writeMetadata(tmpDir, {
+      version: 2,
+      current_stack: "deps",
+      stacks: {
+        deps: { ...DEPS, branches: { ...DEPS.branches, leaf: { parent: "child", pr: 145 } } },
+      },
+    });
+    expect((await runCli(["doctor"])).exitCode).toBe(0);
+    await writePr(145, { state: "OPEN", baseRefName: "child" });
+
+    const res = await runCli(["delete", "child", "--yes"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(res.out).toContain("PR #145 (leaf) base → feat/mid");
+    expect(await prBase(145)).toBe("feat/mid");
+    // No PR still targets child, so origin's copy goes.
+    expect(res.out).not.toContain("still targets it");
+    expect(await refExists(remoteDir, "refs/heads/child")).toBe(false);
+  });
+});
+
+// #171: the fake gh itself. A base with a slash broke its sed, and the edit
+// still exited 0 with the old base kept.
+describe("PR_BASE_STUB", () => {
+  async function gh(...args: string[]) {
+    const proc = Bun.spawn([`${stubDir}/gh`, ...args], {
+      env: { ...process.env, GH_PR_DIR: stubDir },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    return { exitCode, out: stdout };
+  }
+
+  test("pr edit --base records a base with a slash, &, | or a dot", async () => {
+    for (const base of ["feat/a/b", "fix/a&b", "x|y", "v1.2"]) {
+      expect((await gh("pr", "edit", "143", "--base", base)).exitCode).toBe(0);
+      expect(await prBase(143)).toBe(base);
+      expect((await gh("pr", "list", "--base", base)).out).toBe("143\n");
+    }
+  });
+
+  test("pr list --base matches the name exactly, not as a pattern", async () => {
+    await writePr(150, { state: "OPEN", baseRefName: "v1x2" });
+
+    expect((await gh("pr", "list", "--base", "v1.2")).out).toBe("");
+    expect((await gh("pr", "list", "--base", "v1x2")).out).toBe("150\n");
+  });
+
+  test("pr edit --base fails when it can't record the base", async () => {
+    await fs.chmod(stubDir, 0o555);
+    try {
+      expect((await gh("pr", "edit", "143", "--base", "parent")).exitCode).not.toBe(0);
+    } finally {
+      await fs.chmod(stubDir, 0o755);
+    }
+    expect(await prBase(143)).toBe("feat/mid");
+  });
+
+  test("pr edit on a PR the stub doesn't track succeeds and records nothing", async () => {
+    expect((await gh("pr", "edit", "999", "--base", "parent")).exitCode).toBe(0);
+    expect(await Bun.file(`${stubDir}/999.json`).exists()).toBe(false);
+  });
 });
 
 // #114: origin lost the branch already (deleted on GitHub); the tracking ref

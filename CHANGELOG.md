@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### 🧪 Tests
+- **The fake `gh` records a PR base with a slash, and fails when it can't record one.** `PR_BASE_STUB`'s `pr edit --base` wrote the new base with an unescaped `sed`, so a base like `feat/mid` broke the expression: the base was never stored, yet the edit exited 0. It now escapes the name and fails when the write fails, and `pr list --base` matches the name exactly rather than as a pattern. No test moved a PR onto a slashed branch before; one does now. (#171)
+
 ## 0.19.43
 
 ### 🐛 Fixes
