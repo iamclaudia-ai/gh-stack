@@ -361,7 +361,9 @@ it (its PR would be diffed against the parent's old history); the run lists it
 as held and exits 1 until `--resume` gets the parent pushed. Restack (and
 `--resume`) pushes the branches below its start branch whose local commits
 origin lacks first, so `restack --push` from the top after a `--no-push` run
-publishes the whole stack, bottom up. A branch below whose origin copy has
+publishes the whole stack, bottom up. From a split stack (its base is another
+stack's branch) that goes on down through the parent stacks to the trunk. A
+branch below whose origin copy has
 commits you don't is named and skipped (even with `--overwrite-remote`): pull
 them into it, then `restack --resume`. `merge` and `join`
 refuse to run while a restack/sync is pending.
