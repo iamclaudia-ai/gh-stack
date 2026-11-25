@@ -242,8 +242,9 @@ INTERRUPTED RUNS
 
   Branches below the one restack runs from are pushed first when origin
   lacks their local commits (committed on, or restacked with --no-push), so
-  the branches above aren't held back. One only behind origin is left alone;
-  one whose origin copy has commits you lack is named and skipped.
+  the branches above aren't held back. From a split stack that goes on down
+  through the parent stacks to the trunk. One only behind origin is left
+  alone; one whose origin copy has commits you lack is named and skipped.
 
 EXAMPLES
   gh-stack restack              Interactive (prompts before each rebase)

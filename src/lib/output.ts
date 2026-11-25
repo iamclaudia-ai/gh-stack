@@ -72,7 +72,10 @@ export function agentMarker(env: NodeJS.ProcessEnv = process.env): string | unde
  * tmux pane, where stdin is a TTY but no one is typing. Either way the prompt
  * would otherwise hang (holding the repo) until the caller's timeout kills it.
  */
-function ensureInteractive(message: string): void {
+function ensureInteractive(
+  message: string,
+  hint = "Pass --yes (or set GH_STACK_YES=1) to confirm automatically.",
+): void {
   const marker = process.stdin.isTTY ? agentMarker() : undefined;
   if (process.stdin.isTTY && !marker) return;
   const reason = marker
@@ -81,7 +84,7 @@ function ensureInteractive(message: string): void {
   console.error(
     `gh-stack: refusing to prompt — ${reason}.\n` +
       `  Prompt: ${strip(message)}\n` +
-      `  Pass --yes (or set GH_STACK_YES=1) to confirm automatically.`,
+      `  ${strip(hint)}`,
   );
   process.exit(1);
 }
@@ -99,10 +102,17 @@ export const confirm: typeof clack.confirm = (opts) => {
   return clack.confirm(opts).finally(clearGitCache);
 };
 
-export const select: typeof clack.select = (opts) => {
-  ensureInteractive(opts.message);
+/**
+ * `refusalHint` replaces "Pass --yes" in the refusal, for a choice --yes can't
+ * make (which branch to go to, #158).
+ */
+export function select<Value>(
+  opts: Parameters<typeof clack.select<Value>>[0],
+  refusalHint?: string,
+): Promise<Value | symbol> {
+  ensureInteractive(opts.message, refusalHint);
   return clack.select(opts).finally(clearGitCache);
-};
+}
 
 // ── Banner / error ──
 export function intro(message?: string): void {

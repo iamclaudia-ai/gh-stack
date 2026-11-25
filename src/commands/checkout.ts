@@ -6,9 +6,10 @@ import { writeMetadata, getOrderedBranches, findStackForBranch } from "../lib/me
 import { ensureMetadata, checkoutOrExit } from "../lib/safety.ts";
 import { selectBranch, selectStack } from "../lib/ui.ts";
 
+const USAGE_HINT = `checkout takes a stack position (see ${pc.green("gh-stack log")}), a branch name, or --stack.`;
+
 export default async function checkout(args: string[]): Promise<void> {
   const isStackMode = args.includes("--stack");
-  const numberArg = args.find((a) => /^\d+$/.test(a));
 
   if (args.includes("--help")) {
     console.log(`
@@ -16,8 +17,11 @@ gh-stack checkout — Switch branch or stack
 
 USAGE
   gh-stack checkout <number>      Switch to branch by position (non-interactive)
+  gh-stack checkout <branch>      Switch to a branch of any stack by name
   gh-stack checkout               Interactive branch picker (arrow keys)
   gh-stack checkout --stack       Switch between stacks (interactive)
+
+  Under --yes the pickers can't ask, so name the branch.
 
 ALIASES
   gh-stack co
@@ -25,12 +29,27 @@ ALIASES
 EXAMPLES
   gh-stack checkout 1             Jump to first branch in stack (base)
   gh-stack checkout 2             Jump to second branch in stack
+  gh-stack checkout deps/expo     Jump to deps/expo, in whichever stack has it
 
 TIP
   Use 'gh-stack list' to see branch numbers.
 `);
     return;
   }
+
+  // An argument checkout can't use must never exit 0 (#159): an agent would
+  // read that as a switch and carry on, on the wrong branch.
+  const unknown = args.find((a) => a.startsWith("-") && a !== "--stack" && a !== "--help");
+  const positional = args.filter((a) => !a.startsWith("-"));
+  if (unknown || positional.length > 1 || (isStackMode && positional.length > 0)) {
+    const what = unknown
+      ? `Unknown option ${pc.yellow(unknown)}`
+      : `Unexpected argument ${pc.yellow(positional.at(-1)!)}`;
+    p.cancel(`${what}. ${USAGE_HINT}`);
+    process.exit(1);
+  }
+  const target = positional[0];
+  const numberArg = target && /^\d+$/.test(target) ? target : undefined;
 
   const meta = await ensureMetadata();
   const currentBranch = await git.currentBranch();
@@ -63,8 +82,18 @@ TIP
     p.outro(pc.green(`Switched to stack ${pc.yellow(stackName)}`));
   } else {
     // ── Branch switching ──
-    // Find current stack
-    let stackName = findStackForBranch(meta, currentBranch);
+    // A branch named outright belongs to its own stack, which may not be the
+    // current one; otherwise the current branch's stack.
+    const named = target && !numberArg ? target : undefined;
+    let stackName = named
+      ? findStackForBranch(meta, named)
+      : findStackForBranch(meta, currentBranch);
+    if (named && !stackName) {
+      p.cancel(
+        `${pc.yellow(named)} isn't a branch of any stack. ${USAGE_HINT}\n\n  A branch outside the stacks: ${pc.green(`git checkout ${named}`)}`,
+      );
+      process.exit(1);
+    }
     if (!stackName) stackName = meta.current_stack;
 
     if (!stackName || !meta.stacks[stackName]) {
@@ -82,7 +111,9 @@ TIP
 
     let targetBranch: string | null = null;
 
-    if (numberArg) {
+    if (named) {
+      targetBranch = named;
+    } else if (numberArg) {
       // Switch by number
       const index = parseInt(numberArg, 10) - 1;
       if (index < 0 || index >= ordered.length) {
@@ -92,7 +123,12 @@ TIP
       targetBranch = ordered[index]!;
     } else {
       // Interactive selector
-      targetBranch = await selectBranch(stack, "Switch to branch", currentBranch);
+      targetBranch = await selectBranch(
+        stack,
+        "Switch to branch",
+        currentBranch,
+        `Name it instead: ${pc.green("gh-stack checkout <number|branch>")}.`,
+      );
     }
 
     if (!targetBranch) {

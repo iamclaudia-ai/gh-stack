@@ -300,8 +300,13 @@ gh-stack up [n]        # toward children (upstack)
 gh-stack down [n]      # toward parents (downstack)
 gh-stack top           # tip (leaf)
 gh-stack bottom        # base (first branch above trunk)
+gh-stack checkout 2    # by number from ls, or by name: gh-stack checkout <branch>
 gh-stack checkout      # interactive picker (alias: co)
 ```
+
+`--yes` can't choose a branch: at a fork, `up` and `top` stop (exit 1) and name
+the branches, and the `checkout`/`delete` pickers stop too. Go straight to one
+with `gh-stack checkout <branch>`.
 
 ### 4. Sync & restack
 

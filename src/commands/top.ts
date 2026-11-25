@@ -9,6 +9,7 @@ import {
   writeMetadata,
 } from "../lib/metadata.ts";
 import { ensureMetadata, checkoutOrExit } from "../lib/safety.ts";
+import { chooseBranch } from "../lib/ui.ts";
 
 export default async function top(args: string[]): Promise<void> {
   if (args.includes("--help")) {
@@ -48,19 +49,12 @@ Prompts if there are multiple leaf branches.
   if (leaves.length === 1) {
     target = leaves[0]!;
   } else {
-    const result = await p.select({
-      message: "Multiple tips — which branch?",
-      options: leaves.map((l) => ({
-        value: l,
-        label: l,
-        hint: stack.branches[l]?.pr ? `#${stack.branches[l]!.pr}` : undefined,
-      })),
-    });
-    if (p.isCancel(result)) {
-      p.cancel("Cancelled");
-      process.exit(0);
-    }
-    target = result as string;
+    target = await chooseBranch(
+      stack,
+      "Multiple tips — which branch?",
+      leaves,
+      "The stack has several tips",
+    );
   }
 
   if (target === currentBranch) {

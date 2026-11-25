@@ -152,6 +152,7 @@ Shows the current stack as a tree with branch numbers, PRs and descriptions. Bra
 
 ```
 gh-stack checkout [<number>]   Switch to a branch by its number from `ls`; no number opens a picker (alias: co)
+gh-stack checkout <branch>     Switch to a branch of any stack by name
 gh-stack checkout --stack      Switch between stacks (interactive)
 gh-stack up [steps]            Move to a child branch; asks when there are several
 gh-stack down [steps]          Move to the parent branch
