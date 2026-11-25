@@ -23,6 +23,12 @@ export function isAutoYes(): boolean {
 
 /**
  * Render a stack as a tree with branch numbers, PR info, and current marker.
+ *
+ * A straight run from a sole root is the one column a linear stack has always
+ * rendered as. The first branch with several children ends the run, and its
+ * children hang under its ◯ as an indented tree, as the PR descriptions' tree
+ * does (#144, #156). Several roots on the base start the tree straight away.
+ * Numbers are depth-first, the order `checkout <N>` counts.
  */
 export function renderStackTree(
   stack: Stack,
@@ -38,36 +44,52 @@ export function renderStackTree(
   const baseHint = baseIsTrunk ? "" : pc.dim(" (base — in parent stack)");
   lines.push(`${pc.green("◯")} ${base}${baseHint}`);
 
-  for (let i = 0; i < ordered.length; i++) {
-    const branchName = ordered[i]!;
+  const number = new Map(ordered.map((name, i) => [name, i + 1]));
+  const children = (parent: string) =>
+    ordered.filter((name) => stack.branches[name]!.parent === parent);
+
+  /** One branch: a separator, its line after `connector`, its PR line after `guide`. */
+  const entry = (branchName: string, separator: string, connector: string, guide: string) => {
     const branch = stack.branches[branchName]!;
-    const isLast = i === ordered.length - 1;
     const isCurrent = branchName === currentBranch;
-
-    // Tree characters
-    const tree = isLast ? "┗━◯" : "┣━◯";
-
-    // Branch number label
-    const numLabel = showNumbers ? `[${pc.blue(String(i + 1))}] ` : "";
-
-    // Current marker
+    const numLabel = showNumbers ? `[${pc.blue(String(number.get(branchName)))}] ` : "";
     const marker = isCurrent ? ` ${pc.yellow("(current)")}` : "";
-
-    // PR info
     const prNum = branch.pr ? `#${branch.pr}` : "(no PR)";
     const desc = branch.description || branchName;
 
-    // Separator
-    lines.push("┃");
-
+    lines.push(separator);
     if (isCurrent) {
-      lines.push(`${tree} ${numLabel}${pc.yellow(branchName)}${marker}`);
-      lines.push(`┃   ${pc.blue(prNum)}: ${desc}`);
+      lines.push(`${connector} ${numLabel}${pc.yellow(branchName)}${marker}`);
+      lines.push(`${guide}${pc.blue(prNum)}: ${desc}`);
     } else {
-      lines.push(`${tree} ${numLabel}${branchName}`);
-      lines.push(`┃   ${pc.dim(`${prNum}: ${desc}`)}`);
+      lines.push(`${connector} ${numLabel}${branchName}`);
+      lines.push(`${guide}${pc.dim(`${prNum}: ${desc}`)}`);
     }
+  };
+
+  /** `nodes` as siblings under the ◯ above `prefix`, each with its subtree. */
+  const tree = (nodes: string[], prefix: string) => {
+    nodes.forEach((name, k) => {
+      const last = k === nodes.length - 1;
+      const kids = children(name);
+      const guide = `${prefix}${last ? " " : "┃"} ${kids.length > 0 ? "┃" : " "} `;
+      entry(name, `${prefix}┃`, `${prefix}${last ? "┗━◯" : "┣━◯"}`, guide);
+      tree(kids, prefix + (last ? "  " : "┃ "));
+    });
+  };
+
+  const roots = children(base);
+  if (roots.length !== 1) {
+    tree(roots, "");
+    return lines.join("\n");
   }
+  let node = roots[0]!;
+  while (children(node).length === 1) {
+    entry(node, "┃", "┣━◯", "┃   ");
+    node = children(node)[0]!;
+  }
+  if (children(node).length === 0) entry(node, "┃", "┗━◯", "┃   ");
+  else tree([node], "");
 
   return lines.join("\n");
 }
