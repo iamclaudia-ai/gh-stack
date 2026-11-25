@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.19.42
 
 ### 🐛 Fixes
 - **`delete` says when a child PR it moved onto the trunk needs a new push for its checks.** Deleting a branch moves its children's PRs onto its parent before the branch goes (#112), but nothing pushes the children (their commits are kept, not rebased). A PR moved onto the trunk that way had its last checks run against the deleted branch, so a check the trunk requires stays "Expected — Waiting for status to be reported". `delete` now prints the same note `restack`, `submit` and `join` do since 0.19.39: "PR #N's checks last ran against X, not main: a check main requires waits until B is pushed again". (#162)
