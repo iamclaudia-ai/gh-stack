@@ -341,16 +341,12 @@ export async function advancePastMerged(opts: {
     }
 
     if (push) {
-      // Push the rebased head first so the PR diff is clean before its base flips.
-      // If it didn't land, leave the base alone: retargeting onto the trunk with
-      // the old head on origin would show the merged commits in the PR (#29).
-      const pushed = await git.forcePushWithLease(child, { expect: survivor.expect });
-      if (!pushed.ok) {
-        p.log.error(
-          `Push of ${pc.yellow(child)} failed — PR${childPr != null ? ` #${childPr}` : ""} left on ${mergedBranch} for now. The next push of ${child} that lands (gh-stack restack --resume, sync) retargets it.`,
-        );
-        for (const line of git.pushFailureHint(child, pushed)) console.log(`  ${line}`);
-      } else if (childPr != null) {
+      // Retarget first, then push (#133). The push's `pull_request` event
+      // carries the PR's base at that moment, and a trunk's required checks
+      // only count a run made against the trunk: pushed while the PR still
+      // targeted the merged branch, the check stays "Expected" after the
+      // retarget and the PR can't merge.
+      if (childPr != null) {
         const moved = await setPrBase(childPr, recordedBase);
         if (moved.ok) {
           retargeted = true;
@@ -360,6 +356,30 @@ export async function advancePastMerged(opts: {
             `Could not retarget PR #${childPr} (${moved.error}) — the next push of ${child} retries, or set its base to ${recordedBase} manually`,
           );
         }
+      }
+      const pushed = await git.forcePushWithLease(child, { expect: survivor.expect });
+      if (!pushed.ok) {
+        // Put the base back: on the trunk with the old head still on origin,
+        // the PR would show the merged commits (#29).
+        if (retargeted && childPr != null) {
+          const back = await setPrBase(childPr, mergedBranch);
+          if (back.ok) retargeted = false;
+          else {
+            p.log.warn(
+              `Could not move PR #${childPr} back to ${mergedBranch} (${back.error}): until ${child} is pushed, it shows ${mergedBranch}'s commits.`,
+            );
+          }
+        }
+        p.log.error(
+          `Push of ${pc.yellow(child)} failed — ${
+            childPr == null
+              ? "it stays as it was on origin for now."
+              : retargeted
+                ? `PR #${childPr} already targets ${recordedBase}.`
+                : `PR #${childPr} left on ${mergedBranch} for now. The next push of ${child} that lands (gh-stack restack --resume, sync) retargets it.`
+          }`,
+        );
+        for (const line of git.pushFailureHint(child, pushed)) console.log(`  ${line}`);
       }
     } else if (childPr != null) {
       // Retargeting the base without pushing the rebased head would show the

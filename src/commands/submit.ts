@@ -14,7 +14,7 @@ import { isAutoYes } from "../lib/ui.ts";
 import { describeSource, resolveFlag } from "../lib/config.ts";
 import { ConfigError } from "../lib/config-error.ts";
 import type { Stack, StackMetadata } from "../types.ts";
-import { getPrNumber, getRepoNwo, prUrlFor } from "../lib/github.ts";
+import { getPrNumber, getRepoNwo, prUrlFor, setPrBase } from "../lib/github.ts";
 import { describeSkipped, resolveOrCreateStack, type SkippedBranch } from "../lib/chain.ts";
 import {
   branchToTitle,
@@ -537,6 +537,21 @@ async function runSubmit(args: string[], run: RunState, jsonMode: boolean): Prom
     } else if (await isBranchUpToDate(branchName)) {
       p.log.info(`${pc.dim("✓")} ${pc.blue(branchName)} already up to date`);
     } else {
+      // A PR whose recorded base isn't its parent any more (left on a merged
+      // branch by `merge --base --no-push`, say) moves before the push, not
+      // after it (#133): the push's `pull_request` event carries the PR's
+      // base at that moment, and a trunk's required checks only count a run
+      // made against the trunk.
+      let movedFrom: string | null = null;
+      if (branchMeta.pr != null && branchMeta.prBase && branchMeta.prBase !== parentBranch) {
+        const moved = await setPrBase(branchMeta.pr, parentBranch);
+        if (moved.ok) {
+          movedFrom = branchMeta.prBase;
+          branchMeta.prBase = parentBranch;
+          metadataChanged = true;
+          outcome.baseChanged = true;
+        }
+      }
       const s = p.spinner();
       s.start(`Pushing ${pc.blue(branchName)}...`);
       const result = await git.forcePushWithLease(branchName);
@@ -546,6 +561,12 @@ async function runSubmit(args: string[], run: RunState, jsonMode: boolean): Prom
         outcome.pushed = true;
       } else {
         s.stop(pc.red(`Failed to push ${branchName}`));
+        // Put the base back: with the old head still on origin, the PR on its
+        // new base would show the commits of the branch it left (#29).
+        if (movedFrom != null && (await setPrBase(branchMeta.pr!, movedFrom)).ok) {
+          branchMeta.prBase = movedFrom;
+          outcome.baseChanged = false;
+        }
         const hint = git.pushFailureHint(branchName, result);
         for (const line of hint) p.log.warn(line);
         // Name the failing line in the one-line errors too: an agent reading

@@ -482,6 +482,121 @@ describe("a re-run after main moved on finishes the re-root without redoing it (
   });
 });
 
+/**
+ * Log every push origin receives into the fake gh's log, so a test sees pushes
+ * and PR edits in one order; a `reject-<branch>` file in binDir refuses that
+ * branch's push.
+ */
+async function logPushes(): Promise<void> {
+  const hook = `${remoteDir}/hooks/pre-receive`;
+  await Bun.write(
+    hook,
+    `#!/bin/sh
+status=0
+while read old new ref; do
+  b=\${ref#refs/heads/}
+  if [ -f '${binDir}'/reject-"$b" ]; then echo "rejected $b" >&2; status=1; continue; fi
+  echo "push $b" >> '${binDir}/gh.log'
+done
+exit $status
+`,
+  );
+  await fs.chmod(hook, 0o755);
+}
+
+// #133: a push made while the PR still targets the merged branch fires CI with
+// that base, and a trunk's required check never counts for the retargeted PR.
+// So the PR moves to the trunk first, and back again if the push fails.
+describe("the re-rooted branch's PR is retargeted before its push (#133)", () => {
+  test("merge --base: PR #2 → main, then pr2 is pushed", async () => {
+    await githubSquashesPr1();
+    await logPushes();
+    await checkout(tmpDir, "pr1");
+
+    const res = await runCli(["merge", "--base"]);
+
+    expect(res.exitCode).toBe(0);
+    const calls = await ghCalls();
+    const retarget = calls.indexOf("pr edit 2 --base main");
+    expect(retarget).toBeGreaterThan(-1);
+    expect(calls.indexOf("push pr2")).toBeGreaterThan(retarget);
+  });
+
+  test("merge --base: a failed push puts PR #2 back on pr1; restack --resume moves it before pushing", async () => {
+    await githubSquashesPr1();
+    await logPushes();
+    await Bun.write(`${binDir}/reject-pr2`, "");
+    await checkout(tmpDir, "pr1");
+
+    const res = await runCli(["merge", "--base"]);
+
+    expect(res.out).toContain("Push of pr2 failed");
+    let calls = await ghCalls();
+    expect(calls).not.toContain("push pr2");
+    const forth = calls.indexOf("pr edit 2 --base main");
+    expect(forth).toBeGreaterThan(-1);
+    expect(calls.indexOf("pr edit 2 --base pr1")).toBeGreaterThan(forth);
+    expect(JSON.parse(await Bun.file(`${binDir}/2.json`).text()).baseRefName).toBe("pr1");
+    expect((await readMetadata(tmpDir)).stacks["test-stack"]!.branches["pr2"]!.prBase).toBe("pr1");
+
+    // The push goes through now: the PR moves first, then pr2 is pushed.
+    await fs.rm(`${binDir}/reject-pr2`);
+    await fs.rm(`${binDir}/gh.log`);
+    await checkout(tmpDir, "pr2");
+    const resumed = await runCli(["restack", "--resume"]);
+
+    expect(resumed.exitCode).toBe(0);
+    calls = await ghCalls();
+    const retarget = calls.indexOf("pr edit 2 --base main");
+    expect(retarget).toBeGreaterThan(-1);
+    expect(calls.indexOf("push pr2")).toBeGreaterThan(retarget);
+    expect(JSON.parse(await Bun.file(`${binDir}/2.json`).text()).baseRefName).toBe("main");
+    expect((await readMetadata(tmpDir)).stacks["test-stack"]!.branches["pr2"]!.prBase).toBe("main");
+  });
+
+  test("submit after merge --base --no-push: PR #2 → main, then pr2 is pushed", async () => {
+    await githubSquashesPr1();
+    await checkout(tmpDir, "pr1");
+    const merged = await runCli(["merge", "--base", "--no-push"]);
+    expect(merged.exitCode).toBe(0);
+    await logPushes();
+    await fs.rm(`${binDir}/gh.log`);
+    await checkout(tmpDir, "pr2");
+
+    const res = await runCli(["submit", "--no-edit"]);
+
+    expect(res.exitCode).toBe(0);
+    const calls = await ghCalls();
+    const retarget = calls.indexOf("pr edit 2 --base main");
+    expect(retarget).toBeGreaterThan(-1);
+    expect(calls.indexOf("push pr2")).toBeGreaterThan(retarget);
+    expect(calls.filter((c) => c.startsWith("pr edit 2 --base"))).toEqual([
+      "pr edit 2 --base main",
+    ]);
+  });
+
+  test("submit: a failed push puts PR #2 back on pr1", async () => {
+    await githubSquashesPr1();
+    await checkout(tmpDir, "pr1");
+    expect((await runCli(["merge", "--base", "--no-push"])).exitCode).toBe(0);
+    await logPushes();
+    await Bun.write(`${binDir}/reject-pr2`, "");
+    await fs.rm(`${binDir}/gh.log`);
+    await checkout(tmpDir, "pr2");
+
+    const res = await runCli(["submit", "--no-edit"]);
+
+    expect(res.exitCode).not.toBe(0);
+    const calls = await ghCalls();
+    expect(calls.filter((c) => c.startsWith("pr edit 2 --base"))).toEqual([
+      "pr edit 2 --base main",
+      "pr edit 2 --base pr1",
+    ]);
+    expect(JSON.parse(await Bun.file(`${binDir}/2.json`).text()).baseRefName).toBe("pr1");
+    expect((await readMetadata(tmpDir)).stacks["test-stack"]!.branches["pr2"]!.prBase).toBe("pr1");
+  });
+});
+
 // #78: the branch that becomes the new bottom is checked out in another
 // worktree. The re-root and the restack of the tail run there, and merge no
 // longer checks it out here.
