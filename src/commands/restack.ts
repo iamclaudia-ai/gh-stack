@@ -94,6 +94,8 @@ interface ChainContext {
   touched: string[];
   /** Branches whose push failed, was declined or held: their children are held too. */
   unpublished: Set<string>;
+  /** Branches below the start branch skipped because origin has commits they lack (#126). */
+  skippedBelow: Set<string>;
   /** Branch tips on origin (one `ls-remote` per run, kept current as we push). */
   remote: Map<string, string> | null;
   dryRun: boolean;
@@ -101,7 +103,15 @@ interface ChainContext {
 }
 
 function newContext(dryRun: boolean, verbose: boolean): ChainContext {
-  return { rebased: [], touched: [], unpublished: new Set(), remote: null, dryRun, verbose };
+  return {
+    rebased: [],
+    touched: [],
+    unpublished: new Set(),
+    skippedBelow: new Set(),
+    remote: null,
+    dryRun,
+    verbose,
+  };
 }
 
 /**
@@ -449,6 +459,10 @@ async function finishRun(
       console.log(`  ${pc.red("✗")} ${branch}  local ${local.slice(0, 8)}  origin ${remote}`);
     }
     console.log();
+    if (ctx.skippedBelow.size > 0) {
+      const names = [...ctx.skippedBelow].join(", ");
+      console.log(`  First bring origin's commits into ${names} (\`git pull\` there).`);
+    }
     console.log(`  Retry the pushes (parents first): ${pc.green("gh-stack restack --resume")}`);
     if (run) await saveRun(); // stays pending: the pushes are what's left
     p.outro(pc.red("Restack finished with un-pushed refs"));
@@ -1547,6 +1561,7 @@ async function branchesToPushBelow(
     );
   }
   const skip = new Set([...found.map((f) => f.branch), ...unverified.map((u) => u.branch)]);
+  for (const b of skip) ctx.skippedBelow.add(b);
   // Checked like the guard checks the chain: an explicit lease on that tip.
   for (const [branch, sha] of cleared) verifiedTips.set(branch, sha);
   return lagging.filter((b) => !skip.has(b));
@@ -1606,8 +1621,11 @@ async function pushStep(
   const heldBy = await unpublishedParent(branch, parent, ctx);
   if (heldBy) {
     if (await needsPush(meta, branch, ctx)) {
+      const then = ctx.skippedBelow.has(heldBy)
+        ? `Bring origin's commits into ${heldBy} first (\`git pull\` there), then ${pc.green("gh-stack restack --resume")}.`
+        : `Push ${heldBy} first — ${pc.green("gh-stack restack --resume")} retries both, parent first.`;
       p.log.warn(
-        `Not pushing ${pc.yellow(branch)}: its parent ${pc.yellow(heldBy)} isn't on origin at the commit ${branch} sits on, so its PR would be diffed against ${heldBy}'s old history. Push ${heldBy} first — ${pc.green("gh-stack restack --resume")} retries both, parent first.`,
+        `Not pushing ${pc.yellow(branch)}: its parent ${pc.yellow(heldBy)} isn't on origin at the commit ${branch} sits on, so its PR would be diffed against ${heldBy}'s old history. ${then}`,
       );
       ctx.unpublished.add(branch);
       await record({ branch, action: "push-held", detail: `${heldBy} not on origin` });

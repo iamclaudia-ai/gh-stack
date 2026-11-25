@@ -14,6 +14,7 @@ import {
 import {
   addRemote,
   rejectRef,
+  remoteDir,
   remoteSha,
   runCli,
   savedState,
@@ -37,6 +38,25 @@ async function restackedLocally(): Promise<void> {
 
 async function allOnOrigin(): Promise<void> {
   for (const b of ["pr1", "pr2", "pr3"]) expect(await remoteSha(b)).toBe(await sha(b));
+}
+
+/**
+ * main → pr1 → pr2 → pr3 on origin; then origin's pr1 gets a teammate's commit
+ * (never in local pr1's reflog) and local pr1 one of ours: diverged. pr2 still
+ * matches origin, and pr3 gains a commit.
+ */
+async function divergedBelow(): Promise<string> {
+  await createLinearStack(tmpDir);
+  await addRemote();
+  await pushAllBranches(tmpDir);
+  await createBranch(tmpDir, "teammate", "pr1");
+  await makeCommit(tmpDir, "theirs.txt", "theirs\n", "their commit on pr1");
+  await $`git -C ${tmpDir} push -q origin teammate:refs/heads/pr1`.quiet();
+  await checkout(tmpDir, "pr1");
+  await makeCommit(tmpDir, "ours.txt", "ours\n", "our commit on pr1");
+  await checkout(tmpDir, "pr3");
+  await makeCommit(tmpDir, "pr3-more.txt", "more\n", "more on pr3");
+  return remoteSha("pr1");
 }
 
 describe("restack pushes the branches below the one it runs from (#126)", () => {
@@ -137,32 +157,14 @@ describe("restack pushes the branches below the one it runs from (#126)", () => 
     expect(await remoteSha("pr1")).toBe(before);
   });
 
-  /**
-   * main → pr1 → pr2 → pr3 on origin; then origin's pr1 gets a teammate's commit
-   * (never in local pr1's reflog) and local pr1 one of ours: diverged. pr2 still
-   * matches origin, and pr3 gains a commit.
-   */
-  async function divergedBelow(): Promise<string> {
-    await createLinearStack(tmpDir);
-    await addRemote();
-    await pushAllBranches(tmpDir);
-    await createBranch(tmpDir, "teammate", "pr1");
-    await makeCommit(tmpDir, "theirs.txt", "theirs\n", "their commit on pr1");
-    await $`git -C ${tmpDir} push -q origin teammate:refs/heads/pr1`.quiet();
-    await checkout(tmpDir, "pr1");
-    await makeCommit(tmpDir, "ours.txt", "ours\n", "our commit on pr1");
-    await checkout(tmpDir, "pr3");
-    await makeCommit(tmpDir, "pr3-more.txt", "more\n", "more on pr3");
-    return remoteSha("pr1");
-  }
-
   test("--no-push doesn't check origin's copies of the branches below", async () => {
     const theirs = await divergedBelow();
 
     const res = await runCli(["restack", "--no-push"]);
 
     expect(res.exitCode).toBe(0);
-    expect(res.out).not.toContain("Origin has commits");
+    expect(res.out).not.toMatch(/origin has commits/i);
+    expect(res.out).not.toContain("Not pushing pr1");
     expect(await remoteSha("pr1")).toBe(theirs);
   });
 
@@ -175,6 +177,45 @@ describe("restack pushes the branches below the one it runs from (#126)", () => 
     expect(res.out).toContain("Not pushing pr1 (origin has commits it lacks), below pr3");
     expect(await remoteSha("pr1")).toBe(theirs);
     expect(await remoteSha("pr3")).toBe(await sha("pr3"));
+  });
+
+  test("a branch held on a skipped one says to pull first, not just to resume", async () => {
+    const theirs = await divergedBelow();
+    // pr2 and pr3 moved onto our local pr1, so pr2 now sits on it.
+    await $`git -C ${tmpDir} rebase -q pr1 pr2`.quiet();
+    await $`git -C ${tmpDir} rebase -q pr2 pr3`.quiet();
+
+    const res = await runCli(["restack", "--push"]);
+
+    expect(res.exitCode).toBe(1);
+    expect(res.out).toContain("Not pushing pr2: its parent pr1 isn't on origin");
+    expect(res.out).toContain("Bring origin's commits into pr1 first (`git pull` there)");
+    expect(res.out).toContain("First bring origin's commits into pr1 (`git pull` there).");
+    expect(await remoteSha("pr1")).toBe(theirs);
+  });
+
+  test("a branch below whose origin copy is a reworded version is pushed on an explicit lease", async () => {
+    await createLinearStack(tmpDir);
+    await addRemote();
+    await pushAllBranches(tmpDir);
+    // A teammate rewords pr1's tip (same patch) straight on origin: the local
+    // tracking ref still names the old tip, so only an explicit lease on the
+    // checked sha lets the push through.
+    await createBranch(tmpDir, "teammate", "pr1");
+    await $`git -C ${tmpDir} commit -q --amend -m "pr1: reworded"`.quiet();
+    await $`git -C ${tmpDir} push -q origin teammate:refs/heads/teammate`.quiet();
+    const reworded = await sha("teammate");
+    await $`git -C ${remoteDir} update-ref refs/heads/pr1 ${reworded}`.quiet();
+    await $`git -C ${remoteDir} update-ref -d refs/heads/teammate`.quiet();
+    await checkout(tmpDir, "pr1");
+    await makeCommit(tmpDir, "pr1-fix.txt", "fix\n", "fix on pr1");
+    expect((await runCli(["restack", "--no-push"])).exitCode).toBe(0);
+    await checkout(tmpDir, "pr3");
+
+    const res = await runCli(["restack", "--push"]);
+
+    expect(res.exitCode).toBe(0);
+    await allOnOrigin();
   });
 
   test("a branch below that's behind origin isn't pushed backwards", async () => {
