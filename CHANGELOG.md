@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.19.38
 
 ### 🐛 Fixes
 - **The stack tree in PR descriptions draws sibling PRs as branches of their parent.** Several branches on one parent (the dependency sweep builds these: a safe batch with one breaking PR per group on it) were drawn as one straight line, so `#487` read as sitting on `#486`, while the warning above it rightly said its base was `#485`. Siblings now hang under their parent, and a branch on a sibling under that sibling. A straight stack renders exactly as before, so its PRs aren't re-edited. (#144)
