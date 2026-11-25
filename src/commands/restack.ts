@@ -28,7 +28,7 @@ import {
 } from "../lib/safety.ts";
 import { takeSnapshot, resolveRestackBoundary, findRecordedBaseTip } from "../lib/snapshot.ts";
 import { findRemoteOnlyContent, guardRemoteContent, wasLocalTip } from "../lib/remote-guard.ts";
-import { setPrBase } from "../lib/github.ts";
+import { checksBeforeRetargetNote, setPrBase } from "../lib/github.ts";
 import { confirmAction, isAutoYes } from "../lib/ui.ts";
 import { describeSource, flagSetting, resolveFlag, type Resolved } from "../lib/config.ts";
 import {
@@ -1172,14 +1172,17 @@ async function handleReroot(
  * Push one branch under restack's conventions: confirm, `--force-with-lease`,
  * never publish a local-only branch, and do nothing under `--no-push`. Exported
  * for `join` (#32), which syncs the incoming branch itself and publishes it
- * before retargeting PRs onto it.
+ * before retargeting PRs onto it. `beforePush` runs once the push is confirmed,
+ * right before it (join moves the incoming PR's base there: #148).
  */
 export async function publishBranch(
   meta: StackMetadata,
   branch: string,
-  opts: { noPush: boolean },
-): Promise<void> {
-  await withNoPush(opts.noPush, () => pushBranchRef(meta, branch, newContext(false, false)));
+  opts: { noPush: boolean; beforePush?: () => Promise<void> },
+): Promise<PushOutcome> {
+  return withNoPush(opts.noPush, () =>
+    pushBranchRef(meta, branch, newContext(false, false), opts.beforePush),
+  );
 }
 
 /**
@@ -1646,10 +1649,14 @@ async function pushStep(
     case "pushed":
       (await remoteTips(ctx)).set(branch, await git.revParse(branch));
       await record({ branch, action: "pushed" });
-      if (movedFrom == null) await retargetIfStale(meta, stackName, branch);
+      // The move before the push failed: one that lands now came too late
+      // for the push's checks (#148).
+      if (movedFrom == null)
+        noteLateRetarget(meta, stackName, branch, await retargetIfStale(meta, stackName, branch));
       break;
     case "in-sync":
-      await retargetIfStale(meta, stackName, branch);
+      // Nothing to push, so nothing re-runs the checks after this move (#148).
+      noteLateRetarget(meta, stackName, branch, await retargetIfStale(meta, stackName, branch));
       break;
     case "failed":
       ctx.unpublished.add(branch);
@@ -1693,6 +1700,19 @@ async function retargetIfStale(
   p.log.success(`PR #${entry.pr} base → ${pc.green(entry.parent)}`);
   await recordPrBase(meta, stackName, branch, entry.parent);
   return from;
+}
+
+/** Say so when a PR moved onto the trunk only after its last push (#148). */
+function noteLateRetarget(
+  meta: StackMetadata,
+  stackName: string,
+  branch: string,
+  from: string | null,
+): void {
+  const entry = meta.stacks[stackName]?.branches[branch];
+  if (entry?.pr == null) return;
+  const note = checksBeforeRetargetNote(entry.pr, branch, from, entry.parent);
+  if (note) p.log.warn(note);
 }
 
 /**
@@ -1777,7 +1797,7 @@ async function confirmUnknownPush(
   return confirmAction(remoteSha ? "Push with --force-with-lease?" : `Push ${branch} to origin?`);
 }
 
-type PushOutcome = "no-push" | "in-sync" | "local-only" | "pushed" | "failed" | "declined";
+export type PushOutcome = "no-push" | "in-sync" | "local-only" | "pushed" | "failed" | "declined";
 
 /**
  * Reconcile a single branch's ref with origin. Pushes when the local tip

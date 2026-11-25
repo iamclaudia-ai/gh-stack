@@ -14,7 +14,13 @@ import { isAutoYes } from "../lib/ui.ts";
 import { describeSource, resolveFlag } from "../lib/config.ts";
 import { ConfigError } from "../lib/config-error.ts";
 import type { Stack, StackMetadata } from "../types.ts";
-import { getPrNumber, getRepoNwo, prUrlFor, setPrBase } from "../lib/github.ts";
+import {
+  checksBeforeRetargetNote,
+  getPrNumber,
+  getRepoNwo,
+  prUrlFor,
+  setPrBase,
+} from "../lib/github.ts";
 import { describeSkipped, resolveOrCreateStack, type SkippedBranch } from "../lib/chain.ts";
 import {
   branchToTitle,
@@ -604,6 +610,15 @@ async function runSubmit(args: string[], run: RunState, jsonMode: boolean): Prom
         if (branchMeta.prBase !== parentBranch) {
           try {
             await $`gh pr edit ${prNumber} --base ${parentBranch}`.quiet();
+            // A move that could go before the push already did, so this one
+            // comes after it, or with nothing pushed (#148).
+            const note = checksBeforeRetargetNote(
+              prNumber,
+              branchName,
+              branchMeta.prBase,
+              parentBranch,
+            );
+            if (note) p.log.warn(note);
             branchMeta.prBase = parentBranch;
             metadataChanged = true;
             outcome.baseChanged = true;
