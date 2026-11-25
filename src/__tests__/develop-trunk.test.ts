@@ -16,6 +16,8 @@ import {
   getSha,
   isAncestor,
   makeCommit,
+  readMetadata,
+  writeMetadata,
 } from "./helpers.ts";
 import { isTrunkName, trunkBranch } from "../lib/git.ts";
 import { resolveBaseRef, buildStackViz } from "../commands/update-prs.ts";
@@ -72,6 +74,51 @@ describe("a stack in a repo whose default branch is develop", () => {
     expect(res.output).not.toContain("is already in develop");
     expect(res.output).not.toContain("restack --onto main");
     expect(res.output).not.toContain("base appears merged");
+  });
+
+  // #147: the advice for a stack on a landed branch names the repo's trunk.
+  test("doctor advises re-rooting a stack whose base landed onto develop", async () => {
+    await createBranch(tmpDir, "child", "feature");
+    await makeCommit(tmpDir, "child.txt", "child\n", "child: add file");
+    const meta = await readMetadata(tmpDir);
+    meta.stacks.child = {
+      description: "",
+      last_branch: "child",
+      base: "feature",
+      branches: { child: { parent: "feature" } },
+    };
+    await writeMetadata(tmpDir, meta);
+    // feature lands in develop on origin.
+    await $`git -C ${tmpDir} push -q origin feature:develop`.quiet();
+    await $`git -C ${tmpDir} fetch -q origin`.quiet();
+
+    const res = await runCli(["doctor"]);
+    expect(res.output).toContain("Stacks whose base appears merged into develop:");
+    expect(res.output).toContain("Re-root each onto develop once its parent has merged:");
+    expect(res.output).toContain("gh-stack restack --onto develop");
+    expect(res.output).not.toContain("--onto main");
+  });
+
+  test("join's refusal for a branch another stack is built on names develop", async () => {
+    await createBranch(tmpDir, "lone", "develop");
+    await makeCommit(tmpDir, "lone.txt", "lone\n", "lone: add file");
+    await createBranch(tmpDir, "dep", "lone");
+    await makeCommit(tmpDir, "dep.txt", "dep\n", "dep: add file");
+    const meta = await readMetadata(tmpDir);
+    meta.stacks.dep = {
+      description: "",
+      last_branch: "dep",
+      base: "lone",
+      branches: { dep: { parent: "lone" } },
+    };
+    await writeMetadata(tmpDir, meta);
+    await checkout(tmpDir, "feature");
+
+    const res = await runCli(["join", "lone", "--no-push", "--yes"]);
+    expect(res.exitCode).not.toBe(0);
+    expect(res.output).toContain("Stack dep is built on lone");
+    expect(res.output).toContain("gh-stack restack --onto develop");
+    expect(res.output).not.toContain("--onto main");
   });
 
   test("restack leaves the root on its spot in develop: moving it is sync's job", async () => {
