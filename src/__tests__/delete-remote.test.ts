@@ -382,7 +382,8 @@ describe("gh-stack delete, scope of the missing-branch exemption", () => {
 });
 
 describe("gh-stack delete, a root with two children", () => {
-  test("moves both PRs to the base and records prBase in each resulting stack", async () => {
+  /** parent (PR #142 on main) with two children: feat/mid (#143) and sib (#144). */
+  async function twoChildren(): Promise<void> {
     await createBranch(tmpDir, "sib", "parent");
     await makeCommit(tmpDir, "sib.txt", "sib\n", "sib: commit");
     await $`git -C ${tmpDir} checkout -q main`.quiet();
@@ -397,6 +398,10 @@ describe("gh-stack delete, a root with two children", () => {
     expect((await runCli(["doctor"])).exitCode).toBe(0);
     await writePr(142, { state: "OPEN", baseRefName: "parent" });
     await writePr(144, { state: "OPEN", baseRefName: "parent" });
+  }
+
+  test("moves both PRs to the base and records prBase in each resulting stack", async () => {
+    await twoChildren();
 
     const res = await runCli(["delete", "parent", "--yes"]);
 
@@ -420,5 +425,18 @@ describe("gh-stack delete, a root with two children", () => {
     expect(meta.stacks["deps"]!.branches["sib"]).toBeUndefined();
     expect(entry("feat/mid")!.prBase).toBe("main");
     expect(entry("sib")!.prBase).toBe("main");
+  });
+
+  test("only the PR that moved gets the checks note (#162)", async () => {
+    await twoChildren();
+    await Bun.write(`${stubDir}/edit-144.fails`, "99");
+
+    const res = await runCli(["delete", "parent", "--yes"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(await prBase(142)).toBe("main");
+    expect(res.out).toContain("Could not retarget PR #144 (sib) to main");
+    expect(res.out).toContain("PR #142's checks last ran against parent, not main");
+    expect(res.out).not.toContain("PR #144's checks last ran against");
   });
 });
