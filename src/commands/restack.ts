@@ -229,6 +229,10 @@ INTERRUPTED RUNS
   its PR would be diffed against the parent's old history. Run
   \`gh-stack restack --resume\` to retry the pushes, parents first.
 
+  Branches below the one restack runs from are pushed first when origin
+  lacks their local commits (committed on, or restacked with --no-push), so
+  the branches above aren't held back. One only behind origin is left alone.
+
 EXAMPLES
   gh-stack restack              Interactive (prompts before each rebase)
   gh-stack restack --yes        Non-interactive (for agents/CI)
