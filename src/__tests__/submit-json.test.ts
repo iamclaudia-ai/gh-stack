@@ -430,6 +430,28 @@ describe("-t/-b belong to the PRs a submit opens (#122)", () => {
     expect(stderr).toContain("-t/-b went to the new PR for feat-a. PR #436 for feat-b keeps");
   }, 60_000);
 
+  test("a failed create below still keeps -t/-b off the top's PR, and says they went nowhere", async () => {
+    const bodies = `${stubDir}/bodies`;
+    await fs.mkdir(bodies);
+    const env = {
+      GH_EXISTING_PR: "feat-b=436",
+      GH_PR_VIEW_DIR: await viewDir({ 436: "Feature B" }),
+      GH_FAIL_CREATE: "1",
+      GH_BODY_DIR: bodies,
+    };
+
+    const { stderr } = await runSubmit(["--json", "-t", "Fix A", "-b", "Why A"], env);
+
+    const calls = await Bun.file(`${stubDir}/calls.log`).text();
+    expect(calls).not.toContain("pr edit 436 --title Fix A");
+    const body436 = Bun.file(`${bodies}/436.md`);
+    if (await body436.exists()) expect(await body436.text()).not.toContain("Why A");
+    expect(stderr).toContain(
+      "-t/-b were for the new PR for feat-a, which wasn't opened: pass them again when you re-run submit. PR #436 for feat-b keeps",
+    );
+    expect(stderr).not.toContain("went to the new PR");
+  }, 60_000);
+
   test("renumbering starts from the PR's title on GitHub, not a stale cached one", async () => {
     expect((await runSubmit(["--json", "-t", "Add things"])).exitCode).toBe(0);
     // #102's title was fixed on GitHub since; #101's view fails, so its cache stands.

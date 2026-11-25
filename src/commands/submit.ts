@@ -713,8 +713,25 @@ async function runSubmit(args: string[], run: RunState, jsonMode: boolean): Prom
   const retitleCurrent = opening.size === 0 || opening.has(branch);
   const currentPr = stack.branches[branch]?.pr;
   if ((titleFlag || bodyFlag) && !retitleCurrent && currentPr != null) {
+    const names = (bs: string[]) => bs.map((b) => pc.blue(b)).join(", ");
+    const prs = (bs: string[]) => `PR${bs.length === 1 ? "" : "s"}`;
+    const opened = [...opening].filter(
+      (b) => dryRun || outcomes.find((o) => o.branch === b)?.created,
+    );
+    const failed = [...opening].filter((b) => !opened.includes(b));
+    const said: string[] = [];
+    if (opened.length > 0) {
+      said.push(
+        `-t/-b ${dryRun ? "would go" : "went"} to the new ${prs(opened)} for ${names(opened)}.`,
+      );
+    }
+    if (failed.length > 0) {
+      said.push(
+        `-t/-b were for the new ${prs(failed)} for ${names(failed)}, which ${failed.length === 1 ? "wasn't" : "weren't"} opened: pass them again when you re-run submit.`,
+      );
+    }
     p.log.info(
-      `-t/-b went to the new PR${opening.size === 1 ? "" : "s"} for ${[...opening].map((b) => pc.blue(b)).join(", ")}. PR #${currentPr} for ${pc.blue(branch)} keeps its title and description; to change them, run submit -t/-b on ${branch} when there's no new PR to open.`,
+      `${said.join(" ")} PR #${currentPr} for ${pc.blue(branch)} keeps its title and description; to change them, run submit -t/-b on ${branch} when there's no new PR to open.`,
     );
   }
 
