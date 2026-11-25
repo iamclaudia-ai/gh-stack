@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.19.44
 
 ### 🐛 Fixes
 - **Two gh-stack runs at once can no longer post each other's PR descriptions.** Every description edit went through `$TMPDIR/gh-stack-pr-body-<N>.md`, named only by PR number, so two runs editing PRs with the same number (in two repos, say, or two agents' sessions) shared the file: one could send the other's description, and its cleanup could fail and report an edit that went through as failed (`submit --json` then counted that PR `updated` on the next no-op run). Each edit now writes to a temp dir of its own, removed afterwards whether the edit worked or not. (#174)
