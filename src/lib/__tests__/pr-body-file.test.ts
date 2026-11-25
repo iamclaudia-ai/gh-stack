@@ -24,6 +24,9 @@ beforeEach(async () => {
 [ -n "$GH_FAIL" ] && exit 1
 sleep 0.3
 cat "$5" > "${dir}/read/$$"
+# GH_LOCK_DIR: the edit goes through, but its temp dir can't be removed after.
+[ -n "$GH_LOCK_DIR" ] && chmod 555 "$(dirname "$5")"
+exit 0
 `,
   );
   await fs.chmod(join(dir, "bin", "gh"), 0o755);
@@ -37,6 +40,8 @@ console.log(JSON.stringify(oks));
 });
 
 afterEach(async () => {
+  // GH_LOCK_DIR leaves read-only dirs behind; rm can't remove what's in them.
+  await Bun.spawn(["chmod", "-R", "u+w", dir]).exited;
   await fs.rm(dir, { recursive: true, force: true });
 });
 
@@ -74,4 +79,9 @@ test("two edits of the same PR number at once each send their own body, and both
 test("a failed edit reports false and leaves nothing behind", async () => {
   expect(await runEdits({ GH_FAIL: "1" })).toEqual([false, false]);
   expect(await fs.readdir(join(dir, "tmp"))).toEqual([]);
+});
+
+test("a temp dir that can't be removed doesn't turn a posted edit into a failure or a crash", async () => {
+  // The cleanup's errors are ignored: the result is whether gh took the edit.
+  expect(await runEdits({ GH_LOCK_DIR: "1" })).toEqual([true, true]);
 });
