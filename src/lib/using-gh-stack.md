@@ -81,9 +81,9 @@ export GH_STACK_YES=1     # skip every confirmation, plain output
   pass `--push`/`--no-push`. `--yes` itself can't come from a config file:
   always pass it or `GH_STACK_YES=1`.
 - **`checks last ran against <branch>, not main`** means a PR moved onto the
-  trunk only after its branch's last push (the move before the push failed, or
-  there was nothing to push), so a required check waits on a run that will never
-  count. Push the branch again (a new commit, then `gh-stack submit --existing`).
+  trunk only after its branch's last push (the move before the push failed,
+  there was nothing to push, or `delete` moved it off the deleted branch), so a
+  required check waits on a run that will never count. Push the branch again (a new commit, then `gh-stack submit --existing`).
 - A prompt reached without a TTY on stdin **exits 1** (naming the prompt)
   instead of hanging. So does one reached from an agent (`CLAUDECODE` or
   `ANIMA_SESSION_ID` set), even on a TTY: an agent's shell may be a tmux pane,

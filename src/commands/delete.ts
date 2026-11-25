@@ -20,7 +20,7 @@ import {
 import { takeSnapshot } from "../lib/snapshot.ts";
 import { selectBranch, confirmAction } from "../lib/ui.ts";
 import * as git from "../lib/git.ts";
-import { deleteBranchOnGitHub, setPrBase } from "../lib/github.ts";
+import { checksBeforeRetargetNote, deleteBranchOnGitHub, setPrBase } from "../lib/github.ts";
 import { keptWhileTargeted } from "../lib/advance.ts";
 
 const UNTRACK_HELP = `
@@ -264,7 +264,9 @@ OPTIONS
  * branch afterwards (a failed retarget, someone else's PR) keeps it alive.
  *
  * The children aren't rebased: they keep the deleted branch's commits (restack
- * keeps them too), so their PRs now list those commits.
+ * keeps them too), so their PRs now list those commits. Nothing pushes them
+ * either, so a PR moved onto the trunk gets the checks note (#162): its last
+ * push ran the checks against the deleted branch.
  */
 async function deleteRemoteBranch(
   meta: StackMetadata,
@@ -273,11 +275,14 @@ async function deleteRemoteBranch(
   childPrs: { child: string; pr: number }[],
 ): Promise<void> {
   const moved: string[] = [];
+  const notes: string[] = [];
   for (const { child, pr } of childPrs) {
     const r = await setPrBase(pr, newParent);
     if (r.ok) {
       moved.push(child);
       p.log.success(`PR #${pr} (${child}) base → ${pc.green(newParent)}`);
+      const note = checksBeforeRetargetNote(pr, child, branchName, newParent);
+      if (note) notes.push(note);
     } else {
       p.log.warn(`Could not retarget PR #${pr} (${child}) to ${newParent} (${r.error})`);
     }
@@ -298,6 +303,7 @@ async function deleteRemoteBranch(
           : `${moved.join(", ")} are still built on ${branchName}'s commits, so their PRs list them now`,
       ),
     );
+    for (const note of notes) p.log.warn(note);
   }
 
   if (await keptWhileTargeted(branchName)) return;
