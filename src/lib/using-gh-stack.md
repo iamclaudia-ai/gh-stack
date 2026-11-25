@@ -80,6 +80,10 @@ export GH_STACK_YES=1     # skip every confirmation, plain output
   always push. `restack --resume` keeps the interrupted run's push decision unless you
   pass `--push`/`--no-push`. `--yes` itself can't come from a config file:
   always pass it or `GH_STACK_YES=1`.
+- **`checks last ran against <branch>, not main`** means a PR moved onto the
+  trunk only after its branch's last push (the move before the push failed, or
+  there was nothing to push), so a required check waits on a run that will never
+  count. Push the branch again (a new commit, then `gh-stack submit --existing`).
 - A prompt reached without a TTY on stdin **exits 1** (naming the prompt)
   instead of hanging. So does one reached from an agent (`CLAUDECODE` or
   `ANIMA_SESSION_ID` set), even on a TTY: an agent's shell may be a tmux pane,
@@ -170,7 +174,8 @@ gh-stack join <branch> --above <parent>   # insert between <parent> and its chil
 
 `join` syncs the incoming branch onto its new parent first, replaying only its
 own commits, then restacks everything above it, pushes, and retargets the PR
-bases on GitHub. **Don't do this by hand with `git rebase`:** rebasing children
+bases on GitHub (the incoming PR moves right before its push, so a trunk's
+required checks count the push's run). **Don't do this by hand with `git rebase`:** rebasing children
 onto a branch that's behind main silently drags merged main commits into their
 diffs. Run `--dry-run` first and check each PR's commit/file count. A conflict
 syncing the incoming branch leaves the stack untouched (resolve,

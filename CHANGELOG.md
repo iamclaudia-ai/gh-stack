@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### 🐛 Fixes
+- **`join` moves the incoming PR to its new base before pushing the branch, so the trunk's required checks count.** Joined as the new bottom of a stack on `main`, the incoming branch was pushed first and its PR retargeted after, so the push's CI ran against the PR's old base and a required check on `main` stayed "Expected — Waiting for status to be reported" (the order #133 fixed for `merge --base`, `sync`, `restack` and `submit`). The PR now moves right before the push, and back if the push is rejected; a PR already on its new base isn't edited. Children's PRs still move after the push, onto the pushed incoming branch. (#148)
+- **A PR that reaches the trunk only after its last push now says its checks need a new push.** When the move before the push keeps failing, the push goes out anyway; when the move lands later with nothing left to push (`restack`, `submit`) or right after the push (`restack`, `join`), the checks have already run against the old base and nothing re-runs them. gh-stack can't fix that without a new commit, so it now says so: "PR #N's checks last ran against X, not main: a check main requires waits until B is pushed again". (#148)
+
 ### 🧪 Tests
 - **The lock-retry tests let a held lock go on gh-stack's cue, not on a timer.** Three tests held `index.lock` for 250 ms, or released the first `index.lock` a poller saw. On a loaded machine the first attempt could come after the release (nothing waited, so "attempts > 1" failed), or the poller could catch git's own short-lived lock during a rebase and leave the test's held until gh-stack gave up. They now release the lock when gh-stack announces its first wait, so each attempt count is exact. 48 parallel runs at load ~40 passed. (#141)
 - **Restack's reflog boundary is tested for a branch named like a path** (`docs`, with a `docs/` directory in the tree), which needs `commitsNotIn`'s trailing `--`. (#143)
