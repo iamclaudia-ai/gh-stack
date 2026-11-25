@@ -488,8 +488,9 @@ let `submit` describe the stack. Link a specific sibling inline in prose if
 needed.
 
 Every PR above the bottom one opens that footer with a **"Don't merge this PR on
-GitHub"** warning naming the PR below it. Its base on GitHub is that PR's branch,
-not trunk, so merging it squashes it into that branch and closes it for good
+GitHub"** warning naming the PR its branch sits on (siblings on one parent all
+name that parent's PR, and the tree draws them as branches of it). Its base on
+GitHub is that PR's branch, not trunk, so merging it squashes it into that branch and closes it for good
 (a merged PR can't be reopened), and nothing reaches trunk. If you read that
 warning in a PR body, don't merge the PR: land the stack with `gh-stack merge`.
 

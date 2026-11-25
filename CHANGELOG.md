@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### 🐛 Fixes
+- **The stack tree in PR descriptions draws sibling PRs as branches of their parent.** Several branches on one parent (the dependency sweep builds these: a safe batch with one breaking PR per group on it) were drawn as one straight line, so `#487` read as sitting on `#486`, while the warning above it rightly said its base was `#485`. Siblings now hang under their parent, and a branch on a sibling under that sibling. A straight stack renders exactly as before, so its PRs aren't re-edited. (#144)
+- **A PR whose base branch has no PR yet is told to open one, not to merge it.** The warning told you to merge that branch first, which can't be done without a PR. It now says to open a PR for that branch (`gh-stack submit` from it) and merge that first, or land the stack with `gh-stack merge`. (#144)
+
 ## 0.19.37
 
 ### 🐛 Fixes
