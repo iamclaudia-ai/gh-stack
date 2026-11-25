@@ -83,7 +83,8 @@ export GH_STACK_YES=1     # skip every confirmation, plain output
 - **`checks last ran against <branch>, not main`** means a PR moved onto the
   trunk only after its branch's last push (the move before the push failed,
   there was nothing to push, or `delete` moved it off the deleted branch), so a
-  required check waits on a run that will never count. Push the branch again (a new commit, then `gh-stack submit --existing`).
+  required check waits on a run that will never count. Push the branch again
+  (a new commit, then `gh-stack submit --existing`).
 - A prompt reached without a TTY on stdin **exits 1** (naming the prompt)
   instead of hanging. So does one reached from an agent (`CLAUDECODE` or
   `ANIMA_SESSION_ID` set), even on a TTY: an agent's shell may be a tmux pane,
@@ -298,15 +299,15 @@ gh-stack log           # stack tree (default command)
 gh-stack ls            # numbered branch list
 gh-stack up [n]        # toward children (upstack)
 gh-stack down [n]      # toward parents (downstack)
-gh-stack top           # tip (leaf)
+gh-stack top           # tip above the current branch
 gh-stack bottom        # base (first branch above trunk)
 gh-stack checkout 2    # by number from ls, or by name: gh-stack checkout <branch>
 gh-stack checkout      # interactive picker (alias: co)
 ```
 
 `--yes` can't choose a branch: at a fork, `up` and `top` stop (exit 1) and name
-the branches, and the `checkout`, `delete` and `split` pickers stop too. Go straight to one
-with `gh-stack checkout <branch>`.
+the branches (`top` only the tips above you), and the `checkout`, `delete` and
+`split` pickers stop too. Go straight to one with `gh-stack checkout <branch>`.
 
 ### 4. Sync & restack
 

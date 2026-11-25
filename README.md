@@ -156,7 +156,7 @@ gh-stack checkout <branch>     Switch to a branch of any stack by name
 gh-stack checkout --stack      Switch between stacks (interactive)
 gh-stack up [steps]            Move to a child branch; asks when there are several
 gh-stack down [steps]          Move to the parent branch
-gh-stack top                   Jump to the tip of the stack; asks when there are several
+gh-stack top                   Jump to the tip above the current branch; asks when there are several
 gh-stack bottom                Jump to the first branch above trunk
 gh-stack ls                    List the stack's branches with their numbers (alias: list)
 gh-stack stacks [--current] [--json]
@@ -273,9 +273,9 @@ Renames a tracked branch (`git branch -m`) and updates the stack so it stays tra
 gh-stack delete [<branch>] [-k|--keep-branch] [--no-remote]
 ```
 
-Removes a branch from its stack, re-parents its children, and deletes the local branch and its copy on GitHub (through the API, so no pre-push hook runs). Deleting a root with several children makes each child its own stack; deleting the last branch archives the stack. The children's PRs move to the new parent first; their branches aren't pushed, so a PR that lands on the trunk this way says its required checks wait for a new push. With no branch it opens a picker.
+Removes a branch from its stack, re-parents its children, and deletes the local branch and its copy on GitHub (through the API, so no pre-push hook runs). Deleting a root with several children makes each child its own stack; deleting the last branch archives the stack. With no branch it opens a picker.
 
-Before deleting the copy on GitHub, it moves the children's PRs onto the new parent, because GitHub closes a PR whose base branch is deleted. If an open PR still targets the branch (a retarget failed, or it isn't a child in the stack), the copy on GitHub is kept and the PR named. The children aren't rebased: they keep the deleted branch's commits, and so do their PRs. If GitHub already deleted the branch, the leftover `origin/<branch>` tracking ref goes instead.
+Before deleting the copy on GitHub, it moves the children's PRs onto the new parent, because GitHub closes a PR whose base branch is deleted. If an open PR still targets the branch (a retarget failed, or it isn't a child in the stack), the copy on GitHub is kept and the PR named. The children aren't rebased: they keep the deleted branch's commits, and so do their PRs. Their branches aren't pushed either, so a PR that lands on the trunk this way says its required checks wait for a new push. If GitHub already deleted the branch, the leftover `origin/<branch>` tracking ref goes instead.
 
 - `-k, --keep-branch`: remove it from the stack only, like `untrack`
 - `--no-remote`: delete the local branch but keep the remote one
