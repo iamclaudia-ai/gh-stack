@@ -613,15 +613,16 @@ export function ghStubEnv(stubDir: string): Record<string, string> {
 /**
  * The PR-base part of the fake gh (#100): `pr list --base B` prints the open
  * PRs whose N.json has base B, `pr edit N --base B` records B in N.json (and
- * fails while $GH_PR_DIR/edit-N.fails counts down), and the API delete of
- * `git/refs/heads/<b>` deletes <b> in origin's bare repo. Like the real API, it
- * runs no pre-push hook and leaves the local refs/remotes/origin/<b> alone.
+ * fails while $GH_PR_DIR/edit-N.fails counts down, or when the write fails),
+ * and the API delete of `git/refs/heads/<b>` deletes <b> in origin's bare
+ * repo. Like the real API, it runs no pre-push hook and leaves the local
+ * refs/remotes/origin/<b> alone.
  */
 export const PR_BASE_STUB = `if [ "$1 $2" = "pr list" ]; then
   base=""; prev=""
   for a in "$@"; do [ "$prev" = "--base" ] && base="$a"; prev="$a"; done
   for f in "$GH_PR_DIR"/[0-9]*.json; do
-    grep -q '"state":"OPEN"' "$f" && grep -q '"baseRefName":"'"$base"'"' "$f" && basename "$f" .json
+    grep -q '"state":"OPEN"' "$f" && grep -qF '"baseRefName":"'"$base"'"' "$f" && basename "$f" .json
   done
   exit 0
 fi
@@ -632,9 +633,13 @@ if [ "$1 $2" = "pr edit" ]; then
     echo "GraphQL: Something went wrong (updatePullRequest)" >&2
     exit 1
   fi
-  if [ "$4" = "--base" ]; then
-    j="$GH_PR_DIR/$3.json"
-    sed 's/"baseRefName":"[^"]*"/"baseRefName":"'"$5"'"/' "$j" > "$j.tmp" && mv "$j.tmp" "$j"
+  # A PR with no N.json isn't tracked: the edit succeeds and records nothing.
+  # The new base is escaped for sed (backslash, & and the | delimiter): a slash
+  # in it broke the old expression. A failed write fails the edit (#171).
+  j="$GH_PR_DIR/$3.json"
+  if [ "$4" = "--base" ] && [ -f "$j" ]; then
+    b=$(printf '%s' "$5" | sed 's/[\\&|]/\\\\&/g')
+    sed 's|"baseRefName":"[^"]*"|"baseRefName":"'"$b"'"|' "$j" > "$j.tmp" && mv "$j.tmp" "$j" || exit 1
   fi
   exit 0
 fi
