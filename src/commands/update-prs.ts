@@ -522,9 +522,13 @@ export function upperPrWarning(
   const trunk = `\`${base.trunk ?? base.label}\``;
   const pr = below.prNumber != null ? `#${below.prNumber}` : null;
   const baseName = pr ? `${pr}'s branch` : `\`${below.branch}\``;
+  // A base branch with no PR can't be merged first: it needs a PR of its own.
+  const first = pr
+    ? `Merge ${pr} first`
+    : `Open a PR for ${baseName} (\`gh-stack submit\` from it) and merge that first`;
   return [
     "> [!WARNING]",
-    `> **Don't merge this PR on GitHub.** Its base is ${baseName}, not ${trunk}: merging it here squashes it into that branch and closes it for good, with nothing reaching ${trunk}. Merge ${pr ?? baseName} first, or land the stack with \`gh-stack merge\`.`,
+    `> **Don't merge this PR on GitHub.** Its base is ${baseName}, not ${trunk}: merging it here squashes it into that branch and closes it for good, with nothing reaching ${trunk}. ${first}, or land the stack with \`gh-stack merge\`.`,
   ].join("\n");
 }
 
@@ -554,37 +558,64 @@ export function buildStackViz(
   lines.push("<pre>");
   lines.push(`⚫ ${baseLink ?? base.label}`);
   lines.push("┃");
-
-  for (let i = 0; i < branches.length; i++) {
-    const info = branches[i]!;
-    const isLast = i === branches.length - 1;
-    const isTarget = i === targetIndex;
-
-    // PR link
-    let prLink: string;
-    if (info.prNumber) {
-      prLink = info.prUrl ? `<a href="${info.prUrl}">#${info.prNumber}</a>` : `#${info.prNumber}`;
-    } else {
-      prLink = "(no PR yet)";
-    }
-
-    // 👈 marker for the current PR
-    const marker = isTarget ? " 👈" : "";
-
-    // Tree character
-    const tree = isLast ? "┗━" : "┣━";
-
-    // No leading `N.` — the stack position now lives in the PR title itself as
-    // a `(N/M)` suffix (see reconcilePrTitles), so the tree just shows titles.
-    lines.push(`${tree} ${prLink} ${info.prTitle}${marker}`);
-
-    if (!isLast) {
-      lines.push("┃");
-    }
-  }
-
+  lines.push(...treeRows(branches, targetIndex));
   lines.push("</pre>");
   return lines.join("\n");
+}
+
+/**
+ * The tree's rows under the base node. A straight run of branches (each the
+ * only child of the one before) is one column with `┃` between rows, as every
+ * linear stack has always rendered, so their blocks stay byte-identical. The
+ * first branch with several children ends that run, and its children hang
+ * under it as an indented tree (#144). Several roots on the base start the
+ * tree straight away.
+ */
+function treeRows(branches: BranchPrInfo[], targetIndex: number): string[] {
+  const listed = new Set(branches.map((b) => b.branch));
+  const childrenOf = new Map<string, number[]>();
+  const roots: number[] = [];
+  branches.forEach((info, i) => {
+    // The list holds every ancestor of a listed branch (publishedBranches), so
+    // a parent outside it is the base.
+    if (!listed.has(info.parent)) return roots.push(i);
+    childrenOf.set(info.parent, [...(childrenOf.get(info.parent) ?? []), i]);
+  });
+  const children = (i: number) => childrenOf.get(branches[i]!.branch) ?? [];
+
+  // No leading `N.`: the stack position lives in the PR title as a `(N/M)`
+  // suffix (see reconcilePrTitles), so the tree just shows titles.
+  const label = (i: number) => {
+    const info = branches[i]!;
+    const prLink = info.prNumber
+      ? info.prUrl
+        ? `<a href="${info.prUrl}">#${info.prNumber}</a>`
+        : `#${info.prNumber}`
+      : "(no PR yet)";
+    return `${prLink} ${info.prTitle}${i === targetIndex ? " 👈" : ""}`;
+  };
+
+  const rows: string[] = [];
+  const tree = (nodes: number[], prefix: string) => {
+    nodes.forEach((i, k) => {
+      const last = k === nodes.length - 1;
+      rows.push(`${prefix}${last ? "┗━" : "┣━"} ${label(i)}`);
+      tree(children(i), prefix + (last ? "   " : "┃  "));
+    });
+  };
+
+  if (roots.length !== 1) {
+    tree(roots, "");
+    return rows;
+  }
+  let node = roots[0]!;
+  while (children(node).length === 1) {
+    rows.push(`┣━ ${label(node)}`, "┃");
+    node = children(node)[0]!;
+  }
+  rows.push(`┗━ ${label(node)}`);
+  tree(children(node), "   ");
+  return rows;
 }
 
 /** Run `fn` over `items` with at most `limit` concurrent in flight. */
