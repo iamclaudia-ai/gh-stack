@@ -202,6 +202,8 @@ describe("gh-stack delete, the children's PRs", () => {
     expect(res.out).toContain(
       "child is still built on feat/mid's commits, so its PR lists them now",
     );
+    // A move onto a branch that isn't the trunk needs no new check run (#162).
+    expect(res.out).not.toContain("checks last ran against");
     expect(await prBase(143)).toBe("parent");
     // Recorded, so restack and submit don't repeat the edit.
     expect((await readMetadata(tmpDir)).stacks["deps"]!.branches["child"]!.prBase).toBe("parent");
@@ -224,6 +226,7 @@ describe("gh-stack delete, the children's PRs", () => {
     );
     expect(res.out).toContain("Kept feat/mid: PR #143 still targets it");
     expect(res.out).not.toContain("lists them now");
+    expect(res.out).not.toContain("checks last ran against");
     expect((await ghCalls()).filter((c) => c.startsWith("api"))).toEqual([]);
     expect(await refExists(remoteDir, "refs/heads/feat/mid")).toBe(true);
     expect(await refExists(tmpDir, "refs/remotes/origin/feat/mid")).toBe(true);
@@ -400,6 +403,15 @@ describe("gh-stack delete, a root with two children", () => {
     expect(res.exitCode).toBe(0);
     expect(await prBase(142)).toBe("main");
     expect(await prBase(144)).toBe("main");
+    // Moved onto the trunk with nothing pushed: their checks ran against parent (#162).
+    for (const [pr, branch] of [
+      [142, "feat/mid"],
+      [144, "sib"],
+    ]) {
+      expect(res.out).toContain(
+        `PR #${pr}'s checks last ran against parent, not main: a check main requires waits until ${branch} is pushed again`,
+      );
+    }
     expect(await refExists(remoteDir, "refs/heads/parent")).toBe(false);
     // feat/mid keeps "deps"; sib splits off into a stack of its own.
     const meta = await readMetadata(tmpDir);

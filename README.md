@@ -146,7 +146,7 @@ The `--json` document:
 gh-stack log
 ```
 
-Shows the current stack as a tree with branch numbers, PRs and descriptions. Branches on the same parent hang under it side by side; the numbers count depth-first, as `checkout <N>` does. This is the default command. On an untracked branch it says what to run next (`submit` or `init`).
+Shows the current stack as a tree with branch numbers, PRs and descriptions. Branches on the same parent hang under it as an indented tree; the numbers count depth-first, as `checkout <N>` does. This is the default command. On an untracked branch it says what to run next (`submit` or `init`).
 
 ### Stack Navigation
 
@@ -272,7 +272,7 @@ Renames a tracked branch (`git branch -m`) and updates the stack so it stays tra
 gh-stack delete [<branch>] [-k|--keep-branch] [--no-remote]
 ```
 
-Removes a branch from its stack, re-parents its children, and deletes the local branch and its copy on GitHub (through the API, so no pre-push hook runs). Deleting a root with several children makes each child its own stack; deleting the last branch archives the stack. With no branch it opens a picker.
+Removes a branch from its stack, re-parents its children, and deletes the local branch and its copy on GitHub (through the API, so no pre-push hook runs). Deleting a root with several children makes each child its own stack; deleting the last branch archives the stack. The children's PRs move to the new parent first; their branches aren't pushed, so a PR that lands on the trunk this way says its required checks wait for a new push. With no branch it opens a picker.
 
 Before deleting the copy on GitHub, it moves the children's PRs onto the new parent, because GitHub closes a PR whose base branch is deleted. If an open PR still targets the branch (a retarget failed, or it isn't a child in the stack), the copy on GitHub is kept and the PR named. The children aren't rebased: they keep the deleted branch's commits, and so do their PRs. If GitHub already deleted the branch, the leftover `origin/<branch>` tracking ref goes instead.
 
