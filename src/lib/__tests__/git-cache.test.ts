@@ -406,7 +406,7 @@ describe("raw git writes", () => {
   // gh-stack also changes origin through GitHub: a PR merge moves trunk, an
   // API delete removes a branch. The cached ls-remote answer has to go too.
   test("changes made through GitHub are reported with noteRemoteChange", async () => {
-    const GH_WRITE = /\$`gh pr merge |\["pr", "merge"|--method DELETE/;
+    const GH_WRITE = /\$`gh pr merge |"pr", "merge"|(?:-X|--method) DELETE/;
     const root = path.resolve(import.meta.dir, "../..");
     const offenders: string[] = [];
     let writes = 0;
@@ -417,9 +417,12 @@ describe("raw git writes", () => {
         lines.forEach((line, i) => {
           if (!GH_WRITE.test(line)) return;
           writes++;
-          // Reported within the next few lines, once gh has returned.
-          const after = lines.slice(i + 1, i + 9).join("\n");
-          if (!after.includes("noteRemoteChange()")) {
+          // Reported within the next few lines, once gh has returned, and
+          // before any `return`: a report only on the failure path won't do.
+          const next = lines.slice(i + 1, i + 9);
+          const report = next.findIndex((l) => l.includes("noteRemoteChange()"));
+          const exit = next.findIndex((l) => /\breturn\b/.test(l));
+          if (report === -1 || (exit !== -1 && exit < report)) {
             offenders.push(`${dir}/${file}:${i + 1}: ${line.trim()}`);
           }
         });
