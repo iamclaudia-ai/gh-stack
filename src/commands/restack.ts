@@ -1501,12 +1501,19 @@ async function pushStep(
     return;
   }
 
-  const outcome = await pushBranchRef(meta, branch, ctx);
+  // A PR left on a merged branch moves to its parent before the push, not
+  // after it (#133): the push's `pull_request` event carries the PR's base at
+  // that moment, and a trunk's required checks only count a run made against
+  // the trunk. A push that then fails puts the base back.
+  let movedFrom: string | null = null;
+  const outcome = await pushBranchRef(meta, branch, ctx, async () => {
+    movedFrom = await retargetIfStale(meta, stackName, branch);
+  });
   switch (outcome) {
     case "pushed":
       (await remoteTips(ctx)).set(branch, await git.revParse(branch));
       await record({ branch, action: "pushed" });
-      await retargetIfStale(meta, stackName, branch);
+      if (movedFrom == null) await retargetIfStale(meta, stackName, branch);
       break;
     case "in-sync":
       await retargetIfStale(meta, stackName, branch);
@@ -1514,6 +1521,7 @@ async function pushStep(
     case "failed":
       ctx.unpublished.add(branch);
       await record({ branch, action: "push-failed" });
+      if (movedFrom != null) await retargetBack(meta, stackName, branch, movedFrom);
       break;
     case "declined":
       ctx.unpublished.add(branch);
@@ -1529,30 +1537,68 @@ async function pushStep(
 
 /**
  * A PR still targeting a branch that's no longer its parent (an advance past a
- * merged bottom whose push, or retarget, failed): now that the branch is on
- * origin, point the PR at its parent. Only acts on a recorded `prBase` that
- * differs from the parent, so it never guesses a PR's base.
+ * merged bottom whose push, or retarget, failed): point the PR at its parent,
+ * right before the branch's push (or after it, when this run has nothing to
+ * push). Only acts on a recorded `prBase` that differs from the parent, so it
+ * never guesses a PR's base. Returns the base it moved the PR off, or null.
  */
 async function retargetIfStale(
   meta: StackMetadata,
   stackName: string,
   branch: string,
-): Promise<void> {
+): Promise<string | null> {
   const entry = meta.stacks[stackName]?.branches[branch];
-  if (entry?.pr == null || !entry.prBase || entry.prBase === entry.parent) return;
+  if (entry?.pr == null || !entry.prBase || entry.prBase === entry.parent) return null;
+  const from = entry.prBase;
   const moved = await setPrBase(entry.pr, entry.parent);
   if (!moved.ok) {
     p.log.warn(
-      `PR #${entry.pr} still targets ${entry.prBase}; couldn't retarget it to ${entry.parent} (${moved.error}). ${pc.green("gh-stack submit")} retries.`,
+      `PR #${entry.pr} still targets ${from}; couldn't retarget it to ${entry.parent} (${moved.error}). ${pc.green("gh-stack submit")} retries.`,
+    );
+    return null;
+  }
+  p.log.success(`PR #${entry.pr} base → ${pc.green(entry.parent)}`);
+  await recordPrBase(meta, stackName, branch, entry.parent);
+  return from;
+}
+
+/**
+ * Undo retargetIfStale after the push it preceded failed: with the old head
+ * still on origin, the PR on its new base would show the commits of the
+ * branch it just left (#29, #133).
+ */
+async function retargetBack(
+  meta: StackMetadata,
+  stackName: string,
+  branch: string,
+  base: string,
+): Promise<void> {
+  const pr = meta.stacks[stackName]?.branches[branch]?.pr;
+  if (pr == null) return;
+  const back = await setPrBase(pr, base);
+  if (!back.ok) {
+    p.log.warn(
+      `Could not move PR #${pr} back to ${base} (${back.error}): until ${branch} is pushed, it shows ${base}'s commits.`,
     );
     return;
   }
-  p.log.success(`PR #${entry.pr} base → ${pc.green(entry.parent)}`);
-  entry.prBase = entry.parent;
+  p.log.info(`PR #${pr} back on ${pc.yellow(base)} until ${branch} is pushed`);
+  await recordPrBase(meta, stackName, branch, base);
+}
+
+/** Record where a PR's base is now, in memory and on disk. */
+async function recordPrBase(
+  meta: StackMetadata,
+  stackName: string,
+  branch: string,
+  base: string,
+): Promise<void> {
+  const entry = meta.stacks[stackName]?.branches[branch];
+  if (entry) entry.prBase = base;
   const fresh = await readMetadata();
   const saved = fresh?.stacks[stackName]?.branches[branch];
   if (fresh && saved) {
-    saved.prBase = entry.parent;
+    saved.prBase = base;
     await writeMetadata(fresh);
   }
 }
@@ -1614,6 +1660,7 @@ async function pushBranchRef(
   meta: StackMetadata,
   branch: string,
   ctx: ChainContext,
+  beforePush?: () => Promise<void>,
 ): Promise<PushOutcome> {
   if (git.isTrunkName(branch)) return "in-sync";
   // --no-push: leave origin alone; the end-of-run summary lists what's ahead.
@@ -1651,6 +1698,7 @@ async function pushBranchRef(
     return "declined";
   }
   if (!known) p.log.info(`Pushing ${branch}...`);
+  await beforePush?.();
   // A tip the remote guard already checked (only earlier versions of local
   // commits, or --overwrite-remote) gets an explicit lease on exactly that sha.
   const result = await git.forcePushWithLease(branch, { expect: verifiedTips.get(branch) });

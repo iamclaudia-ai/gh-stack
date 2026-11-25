@@ -39,9 +39,11 @@ import {
   planMerges,
   advancePastMerged,
   deleteMergedBranches,
+  landingCommit,
   survivorsOf,
   type BranchReview,
   type MergeAction,
+  type MergedRunEntry,
 } from "../lib/advance.ts";
 import { flagSetting, type Resolved } from "../lib/config.ts";
 import { parseEnvBool } from "../lib/config-error.ts";
@@ -1075,12 +1077,20 @@ function autoMergeFallback(prNumber: number, stderr: string): void {
  * or landed on their own. A PR that can't be read stops the run, so it's
  * re-rooted rather than dropped on a guess.
  */
-async function mergedRunAbove(stack: Stack, ordered: string[]): Promise<string[]> {
-  const run: string[] = [];
+async function mergedRunAbove(stack: Stack, ordered: string[]): Promise<MergedRunEntry[]> {
+  const run: MergedRunEntry[] = [];
   for (const branch of ordered.slice(1)) {
     const pr = stack.branches[branch]?.pr;
-    if (pr == null || (await getPrMergeState(pr))?.state !== "MERGED") break;
-    run.push(branch);
+    const state = pr != null ? await getPrMergeState(pr) : null;
+    if (pr == null || state?.state !== "MERGED") break;
+    run.push({
+      branch,
+      parent: stack.branches[branch]!.parent,
+      pr,
+      baseRefName: state.baseRefName ?? null,
+      mergedAt: state.mergedAt,
+      mergeCommit: state.mergeCommit,
+    });
   }
   return run;
 }
@@ -1208,7 +1218,8 @@ async function mergeBaseOnly(deleteFlag: boolean, dryRun: boolean, args: string[
   // PRs already merged above the base (collapsed into it, or landed on their
   // own) go with it: dropped, never re-rooted, since replaying their commits
   // onto a trunk that holds them squashed conflicts (#54).
-  const mergedAbove = await mergedRunAbove(stack, ordered);
+  const mergedAboveRun = await mergedRunAbove(stack, ordered);
+  const mergedAbove = mergedAboveRun.map((entry) => entry.branch);
   const mergedRun = [baseBranch, ...mergedAbove];
   // Every unmerged branch on the run is re-rooted: one per child (#60).
   const survivors = survivorsOf(stack, mergedRun);
@@ -1368,9 +1379,13 @@ async function mergeBaseOnly(deleteFlag: boolean, dryRun: boolean, args: string[
       p.log.info(`PR #${step.pr} already merged — advancing the stack past it.`);
     }
 
+    // The base PR's squash on the trunk: a survivor that already holds it was
+    // re-rooted by an earlier run (#132).
+    let baseLanded: string | null = null;
     if (survivors.length > 0) {
       // Re-root onto the trunk as it is now, with the merge in it (#51).
       const trunkState = await fetchTrunkWithMerge(trunk, step.pr!);
+      baseLanded = trunkState.mergeCommit;
       if (!trunkState.ok) {
         console.log();
         p.log.error(
@@ -1397,6 +1412,11 @@ async function mergeBaseOnly(deleteFlag: boolean, dryRun: boolean, args: string[
         branch,
         pr: stack.branches[branch]?.pr ?? null,
         expect: verified.get(branch),
+        landed: landingCommit(
+          [{ branch: baseBranch, baseRefName: trunk, mergeCommit: baseLanded }, ...mergedAboveRun],
+          stack.branches[branch]!.parent,
+          trunk,
+        ),
       })),
       targetRef,
       recordedBase: trunk,

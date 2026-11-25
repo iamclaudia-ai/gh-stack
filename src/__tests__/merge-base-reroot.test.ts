@@ -184,6 +184,16 @@ async function mainAddsConflictingPr2File(): Promise<void> {
   await git(otherDir, "push", "-q", "origin", "main");
 }
 
+/** Someone else's PR lands on "GitHub"'s main: it moves on, touching nothing of ours. */
+async function mainMovesOn(): Promise<void> {
+  await git(otherDir, "checkout", "-q", "main");
+  await git(otherDir, "pull", "-q", "--ff-only", "origin", "main");
+  await Bun.write(`${otherDir}/elsewhere.txt`, "someone else's change\n");
+  await git(otherDir, "add", "elsewhere.txt");
+  await git(otherDir, "commit", "-q", "-m", "main: someone else's PR");
+  await git(otherDir, "push", "-q", "origin", "main");
+}
+
 describe("merge --base re-roots onto the trunk after the squash (#51)", () => {
   test("the next branch lands on main with the merged PR's squash, and the tail follows", async () => {
     await githubSquashesPr1();
@@ -410,6 +420,180 @@ describe("sync's re-root stopped on a conflict is finished by re-running sync (#
     const meta = await readMetadata(tmpDir);
     expect(meta.stacks["test-stack"]!.branches["pr1"]).toBeUndefined();
     expect(meta.stacks["test-stack"]!.branches["pr2"]!.parent).toBe("main");
+  });
+});
+
+// #132: on a busy repo, main moves on between the run that stopped and the
+// re-run. The re-run fetches it again, so the re-rooted branch no longer
+// contains origin/main, and it used to be re-rooted a second time from the
+// merge-base with the merged branch: the old fork point on main, replaying
+// every main commit since. Holding the merged PR's squash commit is the proof.
+describe("a re-run after main moved on finishes the re-root without redoing it (#132)", () => {
+  async function stopOnConflictThenResolve(command: string[]): Promise<void> {
+    const first = await runCli(command);
+    expect(first.exitCode).toBe(2);
+    expect(first.out).toContain("Rebase conflict re-rooting pr2 onto main");
+    await Bun.write(`${tmpDir}/pr2.txt`, "resolved\n");
+    await git(tmpDir, "add", "pr2.txt");
+    await $`git -C ${tmpDir} -c core.editor=true rebase --continue`.quiet();
+  }
+
+  test("merge --base: pr2 is pushed as resolved, not re-rooted again", async () => {
+    await mainAddsConflictingPr2File();
+    await githubSquashesPr1();
+    await checkout(tmpDir, "pr1");
+    await stopOnConflictThenResolve(["merge", "--base"]);
+    const resolved = await git(tmpDir, "rev-parse", "pr2");
+    await mainMovesOn();
+
+    const second = await runCli(["merge", "--base"]);
+
+    expect(second.exitCode).toBe(0);
+    expect(second.out).toContain("pr2 is already on main");
+    expect(second.out).not.toContain("Re-rooting pr2");
+    expect(await git(tmpDir, "rev-parse", "pr2")).toBe(resolved);
+    expect(await remoteSha("pr2")).toBe(resolved);
+    expect(await git(tmpDir, "rev-list", "--count", "pr2..pr3")).toBe("1");
+    expect(await ghCalls()).toContain("pr edit 2 --base main");
+    const meta = await readMetadata(tmpDir);
+    expect(meta.stacks["test-stack"]!.branches["pr1"]).toBeUndefined();
+    expect(meta.stacks["test-stack"]!.branches["pr2"]!.parent).toBe("main");
+  });
+
+  test("sync: pr2 is not re-rooted again, and the usual sync rebases it onto the new main", async () => {
+    await mainAddsConflictingPr2File();
+    await githubSquashesPr1();
+    await $`sh ${binDir}/merge-1.sh`.quiet();
+    await checkout(tmpDir, "pr2");
+    await stopOnConflictThenResolve(["sync"]);
+    await mainMovesOn();
+
+    const second = await runCli(["sync"]);
+
+    expect(second.exitCode).toBe(0);
+    expect(second.out).toContain("pr2 is already on main");
+    expect(second.out).not.toContain("Re-rooting pr2");
+    // Then sync's own rebase moves it onto the new main: one commit of its own.
+    const main = await remoteSha("main");
+    expect(await contains(remoteDir, main, "refs/heads/pr2")).toBe(true);
+    expect(await git(tmpDir, "rev-list", "--count", `${main}..pr2`)).toBe("1");
+    expect(await git(tmpDir, "rev-list", "--count", "pr2..pr3")).toBe("1");
+    expect(await ghCalls()).toContain("pr edit 2 --base main");
+  });
+});
+
+/**
+ * Log every push origin receives into the fake gh's log, so a test sees pushes
+ * and PR edits in one order; a `reject-<branch>` file in binDir refuses that
+ * branch's push.
+ */
+async function logPushes(): Promise<void> {
+  const hook = `${remoteDir}/hooks/pre-receive`;
+  await Bun.write(
+    hook,
+    `#!/bin/sh
+status=0
+while read old new ref; do
+  b=\${ref#refs/heads/}
+  if [ -f '${binDir}'/reject-"$b" ]; then echo "rejected $b" >&2; status=1; continue; fi
+  echo "push $b" >> '${binDir}/gh.log'
+done
+exit $status
+`,
+  );
+  await fs.chmod(hook, 0o755);
+}
+
+// #133: a push made while the PR still targets the merged branch fires CI with
+// that base, and a trunk's required check never counts for the retargeted PR.
+// So the PR moves to the trunk first, and back again if the push fails.
+describe("the re-rooted branch's PR is retargeted before its push (#133)", () => {
+  test("merge --base: PR #2 → main, then pr2 is pushed", async () => {
+    await githubSquashesPr1();
+    await logPushes();
+    await checkout(tmpDir, "pr1");
+
+    const res = await runCli(["merge", "--base"]);
+
+    expect(res.exitCode).toBe(0);
+    const calls = await ghCalls();
+    const retarget = calls.indexOf("pr edit 2 --base main");
+    expect(retarget).toBeGreaterThan(-1);
+    expect(calls.indexOf("push pr2")).toBeGreaterThan(retarget);
+  });
+
+  test("merge --base: a failed push puts PR #2 back on pr1; restack --resume moves it before pushing", async () => {
+    await githubSquashesPr1();
+    await logPushes();
+    await Bun.write(`${binDir}/reject-pr2`, "");
+    await checkout(tmpDir, "pr1");
+
+    const res = await runCli(["merge", "--base"]);
+
+    expect(res.out).toContain("Push of pr2 failed");
+    let calls = await ghCalls();
+    expect(calls).not.toContain("push pr2");
+    const forth = calls.indexOf("pr edit 2 --base main");
+    expect(forth).toBeGreaterThan(-1);
+    expect(calls.indexOf("pr edit 2 --base pr1")).toBeGreaterThan(forth);
+    expect(JSON.parse(await Bun.file(`${binDir}/2.json`).text()).baseRefName).toBe("pr1");
+    expect((await readMetadata(tmpDir)).stacks["test-stack"]!.branches["pr2"]!.prBase).toBe("pr1");
+
+    // The push goes through now: the PR moves first, then pr2 is pushed.
+    await fs.rm(`${binDir}/reject-pr2`);
+    await fs.rm(`${binDir}/gh.log`);
+    await checkout(tmpDir, "pr2");
+    const resumed = await runCli(["restack", "--resume"]);
+
+    expect(resumed.exitCode).toBe(0);
+    calls = await ghCalls();
+    const retarget = calls.indexOf("pr edit 2 --base main");
+    expect(retarget).toBeGreaterThan(-1);
+    expect(calls.indexOf("push pr2")).toBeGreaterThan(retarget);
+    expect(JSON.parse(await Bun.file(`${binDir}/2.json`).text()).baseRefName).toBe("main");
+    expect((await readMetadata(tmpDir)).stacks["test-stack"]!.branches["pr2"]!.prBase).toBe("main");
+  });
+
+  test("submit after merge --base --no-push: PR #2 → main, then pr2 is pushed", async () => {
+    await githubSquashesPr1();
+    await checkout(tmpDir, "pr1");
+    const merged = await runCli(["merge", "--base", "--no-push"]);
+    expect(merged.exitCode).toBe(0);
+    await logPushes();
+    await fs.rm(`${binDir}/gh.log`);
+    await checkout(tmpDir, "pr2");
+
+    const res = await runCli(["submit", "--no-edit"]);
+
+    expect(res.exitCode).toBe(0);
+    const calls = await ghCalls();
+    const retarget = calls.indexOf("pr edit 2 --base main");
+    expect(retarget).toBeGreaterThan(-1);
+    expect(calls.indexOf("push pr2")).toBeGreaterThan(retarget);
+    expect(calls.filter((c) => c.startsWith("pr edit 2 --base"))).toEqual([
+      "pr edit 2 --base main",
+    ]);
+  });
+
+  test("submit: a failed push puts PR #2 back on pr1", async () => {
+    await githubSquashesPr1();
+    await checkout(tmpDir, "pr1");
+    expect((await runCli(["merge", "--base", "--no-push"])).exitCode).toBe(0);
+    await logPushes();
+    await Bun.write(`${binDir}/reject-pr2`, "");
+    await fs.rm(`${binDir}/gh.log`);
+    await checkout(tmpDir, "pr2");
+
+    const res = await runCli(["submit", "--no-edit"]);
+
+    expect(res.exitCode).not.toBe(0);
+    const calls = await ghCalls();
+    expect(calls.filter((c) => c.startsWith("pr edit 2 --base"))).toEqual([
+      "pr edit 2 --base main",
+      "pr edit 2 --base pr1",
+    ]);
+    expect(JSON.parse(await Bun.file(`${binDir}/2.json`).text()).baseRefName).toBe("pr1");
+    expect((await readMetadata(tmpDir)).stacks["test-stack"]!.branches["pr2"]!.prBase).toBe("pr1");
   });
 });
 

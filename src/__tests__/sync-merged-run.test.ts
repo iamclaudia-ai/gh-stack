@@ -26,7 +26,7 @@ import {
   setupRemote,
   writeMetadata,
 } from "./helpers.ts";
-import { strandedMerges } from "../lib/advance.ts";
+import { landingCommit, strandedMerges } from "../lib/advance.ts";
 
 setDefaultTimeout(60_000);
 
@@ -354,6 +354,7 @@ function mergedRun(entries: Array<[string, string, string | null, string | null]
     pr: i + 1,
     baseRefName,
     mergedAt,
+    mergeCommit: null,
   }));
 }
 
@@ -400,5 +401,28 @@ describe("strandedMerges", () => {
       ["pr2", "pr1", "pr1", "2026-10-31T11:00:00Z"],
     ]);
     expect(strandedMerges(merged, "main")).toEqual([]);
+  });
+});
+
+function entry(branch: string, baseRefName: string | null, mergeCommit: string | null) {
+  return { branch, baseRefName, mergeCommit };
+}
+
+describe("landingCommit (#132)", () => {
+  test("a PR merged into the trunk landed with its own merge commit", () => {
+    const run = [entry("pr1", "main", "s1"), entry("pr2", "main", "s2")];
+    expect(landingCommit(run, "pr2", "main")).toBe("s2");
+  });
+
+  test("a PR collapsed into the base landed with the base's merge commit", () => {
+    const run = [entry("pr1", "main", "s1"), entry("pr2", "pr1", "c2"), entry("pr3", "pr2", "c3")];
+    expect(landingCommit(run, "pr3", "main")).toBe("s1");
+  });
+
+  test("no landing commit when the chain leaves the run, loops, or GitHub named none", () => {
+    expect(landingCommit([entry("pr2", "elsewhere", "c2")], "pr2", "main")).toBeNull();
+    expect(landingCommit([entry("a", "b", "x"), entry("b", "a", "y")], "a", "main")).toBeNull();
+    expect(landingCommit([entry("pr1", "main", null)], "pr1", "main")).toBeNull();
+    expect(landingCommit([], "pr1", "main")).toBeNull();
   });
 });
