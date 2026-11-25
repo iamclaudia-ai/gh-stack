@@ -27,7 +27,7 @@ import {
   ensureWorktreesReady,
 } from "../lib/safety.ts";
 import { takeSnapshot, resolveRestackBoundary, findRecordedBaseTip } from "../lib/snapshot.ts";
-import { guardRemoteContent, wasLocalTip } from "../lib/remote-guard.ts";
+import { findRemoteOnlyContent, guardRemoteContent, wasLocalTip } from "../lib/remote-guard.ts";
 import { setPrBase } from "../lib/github.ts";
 import { confirmAction, isAutoYes } from "../lib/ui.ts";
 import { describeSource, flagSetting, resolveFlag, type Resolved } from "../lib/config.ts";
@@ -94,6 +94,8 @@ interface ChainContext {
   touched: string[];
   /** Branches whose push failed, was declined or held: their children are held too. */
   unpublished: Set<string>;
+  /** Branches below the start branch skipped because origin has commits they lack (#126). */
+  skippedBelow: Set<string>;
   /** Branch tips on origin (one `ls-remote` per run, kept current as we push). */
   remote: Map<string, string> | null;
   dryRun: boolean;
@@ -101,7 +103,15 @@ interface ChainContext {
 }
 
 function newContext(dryRun: boolean, verbose: boolean): ChainContext {
-  return { rebased: [], touched: [], unpublished: new Set(), remote: null, dryRun, verbose };
+  return {
+    rebased: [],
+    touched: [],
+    unpublished: new Set(),
+    skippedBelow: new Set(),
+    remote: null,
+    dryRun,
+    verbose,
+  };
 }
 
 /**
@@ -204,7 +214,8 @@ OPTIONS
               restack from the current branch
   --overwrite-remote
               Rewrite branches even though origin has commits they lack
-              (see below). Those commits are dropped from origin
+              (see below). Those commits are dropped from origin. Covers the
+              run's own branches, not the ones below it
   --dry-run   Show what would happen without executing
   --verbose   Show diagnostic info (where each rebase base came from)
 
@@ -228,6 +239,11 @@ INTERRUPTED RUNS
   A branch whose parent's push failed (or was declined) is not pushed:
   its PR would be diffed against the parent's old history. Run
   \`gh-stack restack --resume\` to retry the pushes, parents first.
+
+  Branches below the one restack runs from are pushed first when origin
+  lacks their local commits (committed on, or restacked with --no-push), so
+  the branches above aren't held back. One only behind origin is left alone;
+  one whose origin copy has commits you lack is named and skipped.
 
 EXAMPLES
   gh-stack restack              Interactive (prompts before each rebase)
@@ -444,6 +460,10 @@ async function finishRun(
       console.log(`  ${pc.red("✗")} ${branch}  local ${local.slice(0, 8)}  origin ${remote}`);
     }
     console.log();
+    if (ctx.skippedBelow.size > 0) {
+      const names = [...ctx.skippedBelow].join(", ");
+      console.log(`  First bring origin's commits into ${names} (\`git pull\` there).`);
+    }
     console.log(`  Retry the pushes (parents first): ${pc.green("gh-stack restack --resume")}`);
     if (run) await saveRun(); // stays pending: the pushes are what's left
     p.outro(pc.red("Restack finished with un-pushed refs"));
@@ -848,6 +868,11 @@ async function handleResume(
     for (const line of formatRunLog(state)) console.log(line);
   }
 
+  // Branches below the chain that origin still lags behind are pushed first
+  // (#126), whether the run pushed them before it stopped or not.
+  const stack = meta.stacks[state.stack_name]!;
+  const below = await branchesToPushBelow(meta, stack, state.chain[0]!, ctx);
+
   // Origin may have moved while the run was stopped.
   await guardRemote(meta, state.chain, ctx.dryRun);
 
@@ -862,7 +887,6 @@ async function handleResume(
   // (failed or held ones are retried, parents first); the rest restack as usual.
   // A declined rebase isn't done, and neither is anything above it: those are
   // offered again, and pushed only once they sit on their parents.
-  const stack = meta.stacks[state.stack_name]!;
   const redo = withDescendants(stack, state.chain, state.declined);
   for (const b of state.declined) ctx.unpublished.add(b);
   const pushOnly = new Set(
@@ -903,6 +927,7 @@ async function handleResume(
     }
   }
 
+  await pushBelow(meta, state.stack_name, state.chain[0]!, below, ctx);
   await processChain(meta, state.stack_name, state.chain, 0, pushOnly, ctx);
   return { logBefore };
 }
@@ -976,6 +1001,8 @@ async function handleFreshRestack(
     }
   }
 
+  const below = await branchesToPushBelow(meta, stack, currentBranch, ctx);
+
   // The base branches are force-pushed too, so they're checked with the rest.
   await guardRemote(meta, chain, ctx.dryRun);
 
@@ -988,6 +1015,7 @@ async function handleFreshRestack(
     await beginRun({ command: "restack", stackName, chain, pushOnly: baseBranches });
   }
 
+  await pushBelow(meta, stackName, chain[0]!, below, ctx);
   await processChain(meta, stackName, chain, 0, new Set(baseBranches), ctx);
 }
 
@@ -1462,11 +1490,113 @@ async function unpublishedParent(
 ): Promise<string | null> {
   if (!parent || git.isTrunkName(parent) || parent === branch) return null;
   if (ctx.unpublished.has(parent)) return parent;
-  const remote = (await remoteTips(ctx)).get(parent);
-  if (!remote || !(await git.localBranchExists(parent))) return null;
-  const local = await git.revParse(parent);
-  if (local === remote || (await git.isAncestor(local, remote))) return null;
-  return parent;
+  return (await originLacksLocalTip(parent, ctx)) ? parent : null;
+}
+
+/**
+ * Whether origin has a copy of `branch` that doesn't contain its local tip, so
+ * a child pushed onto it would be held (#29). False for a branch with no copy
+ * on origin, and for one merely behind origin.
+ */
+async function originLacksLocalTip(branch: string, ctx: ChainContext): Promise<boolean> {
+  const remote = (await remoteTips(ctx)).get(branch);
+  if (!remote || !(await git.localBranchExists(branch))) return false;
+  const local = await git.revParse(branch);
+  return local !== remote && !(await git.isAncestor(local, remote));
+}
+
+/**
+ * The branches below `branch` in its stack, root first, whose local tips
+ * origin doesn't have (#126). A restack from mid-stack or the top pushes them
+ * before its own chain: otherwise every branch above them is held back, and a
+ * `--resume`, which retries only its run's chain, never gets past them. One
+ * behind origin is left alone (pushing it would drop origin's commits), and so
+ * is one with no copy on origin (publishing is `submit`'s job, #24).
+ */
+async function unpublishedAncestors(
+  stack: Stack,
+  branch: string,
+  ctx: ChainContext,
+): Promise<string[]> {
+  const base = stackBase(stack);
+  const below: string[] = [];
+  for (
+    let b = stack.branches[branch]?.parent;
+    b && b !== base && stack.branches[b] && b !== branch && !below.includes(b);
+    b = stack.branches[b]?.parent
+  ) {
+    below.unshift(b);
+  }
+  const lagging: string[] = [];
+  for (const b of below) if (await originLacksLocalTip(b, ctx)) lagging.push(b);
+  return lagging;
+}
+
+/**
+ * The branches below `start` this run pushes first (#126): none under
+ * --no-push, and none whose origin copy has commits local lacks (or couldn't
+ * be checked). Those are named and left alone rather than stopping the run, as
+ * the remote guard would: the run never needed them, and a branch above that
+ * sits on one is held back by `unpublishedParent` as before.
+ */
+async function branchesToPushBelow(
+  meta: StackMetadata,
+  stack: Stack,
+  start: string,
+  ctx: ChainContext,
+): Promise<string[]> {
+  if (noPush) return [];
+  const lagging = await unpublishedAncestors(stack, start, ctx);
+  if (lagging.length === 0) return [];
+  const { found, cleared, unverified } = await findRemoteOnlyContent(
+    (await readMetadata()) ?? meta,
+    lagging,
+  );
+  const blocked = [
+    ...found.map((f) => `${pc.yellow(f.branch)} (origin has commits it lacks)`),
+    ...unverified.map((u) => `${pc.yellow(u.branch)} (origin's copy couldn't be checked)`),
+  ];
+  if (blocked.length > 0) {
+    p.log.warn(
+      `Not pushing ${blocked.join(", ")}, below ${start}. Bring origin's commits in first (\`git pull\` there), then restack; a branch sitting on ${blocked.length === 1 ? "it" : "one"} isn't pushed until then.`,
+    );
+  }
+  const skip = new Set([...found.map((f) => f.branch), ...unverified.map((u) => u.branch)]);
+  for (const b of skip) ctx.skippedBelow.add(b);
+  // Checked like the guard checks the chain: an explicit lease on that tip.
+  for (const [branch, sha] of cleared) verifiedTips.set(branch, sha);
+  return lagging.filter((b) => !skip.has(b));
+}
+
+/**
+ * Push the branches below a run's chain that origin lags behind (#126),
+ * parents first, ahead of the chain's own pushes. They stay out of the run's
+ * chain: a resume works them out again from the stack as it is then (one
+ * pushed by hand meanwhile drops out), and a run from the top doesn't count as
+ * having restacked the branches below it.
+ */
+async function pushBelow(
+  meta: StackMetadata,
+  stackName: string,
+  start: string,
+  below: string[],
+  ctx: ChainContext,
+): Promise<void> {
+  if (below.length === 0) return;
+  const names = below.map((b) => pc.yellow(b)).join(", ");
+  if (ctx.dryRun) {
+    p.log.warn(
+      `[DRY RUN] Would push ${names} first: origin lags behind ${below.length === 1 ? "it" : "them"}, below ${start}`,
+    );
+    return;
+  }
+  p.log.info(
+    `Origin lags behind ${names}, below ${start}. Pushing ${below.length === 1 ? "it" : "them"} first, so the branches above aren't held back.`,
+  );
+  for (const b of below) {
+    ctx.touched.push(b);
+    await pushStep(meta, stackName, b, ctx);
+  }
 }
 
 /** Whether pushing `branch` would change origin (it differs, or a published branch is missing). */
@@ -1492,8 +1622,11 @@ async function pushStep(
   const heldBy = await unpublishedParent(branch, parent, ctx);
   if (heldBy) {
     if (await needsPush(meta, branch, ctx)) {
+      const then = ctx.skippedBelow.has(heldBy)
+        ? `Bring origin's commits into ${heldBy} first (\`git pull\` there), then ${pc.green("gh-stack restack --resume")}.`
+        : `Push ${heldBy} first — ${pc.green("gh-stack restack --resume")} retries both, parent first.`;
       p.log.warn(
-        `Not pushing ${pc.yellow(branch)}: its parent ${pc.yellow(heldBy)} isn't on origin at the commit ${branch} sits on, so its PR would be diffed against ${heldBy}'s old history. Push ${heldBy} first — ${pc.green("gh-stack restack --resume")} retries both, parent first.`,
+        `Not pushing ${pc.yellow(branch)}: its parent ${pc.yellow(heldBy)} isn't on origin at the commit ${branch} sits on, so its PR would be diffed against ${heldBy}'s old history. ${then}`,
       );
       ctx.unpublished.add(branch);
       await record({ branch, action: "push-held", detail: `${heldBy} not on origin` });

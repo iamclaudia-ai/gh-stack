@@ -185,7 +185,7 @@ Rebases the current branch and every branch above it onto their parents, then fo
 - `--push`: push even when the env var or config says not to
 - `--resume`: continue an interrupted run (after a conflict, a failed push or a kill). It keeps that run's push decision unless you pass `--push` or `--no-push`.
 - `--fresh`: discard an interrupted run and start over
-- `--overwrite-remote`: rewrite branches even though origin has commits they lack (see below), dropping those commits
+- `--overwrite-remote`: rewrite branches even though origin has commits they lack (see below), dropping those commits. It covers the run's own branches; a branch below the start branch with such commits is skipped either way
 - `--onto <ref>`: re-root the stack onto a new base, replaying only the stack's own commits. Use it to move a split stack onto `main` once the stack it was split from has merged.
 - `--dry-run`: show what would happen
 - `-v, --verbose`: show where each rebase base came from
@@ -195,6 +195,7 @@ On a conflict, resolve it, run `git rebase --continue`, then `gh-stack restack -
 - **Interrupted runs.** restack and sync save their progress after every rebase and push. A bare `restack` or `sync` with a run pending asks to finish it first (with `--yes` it does), says when it has, then does its own work. `git rebase --abort` ends the rebase, not the run; use `--fresh` to abandon it. `merge` and `join` refuse to start while a run is pending.
 - **Commits only on origin.** Before rewriting anything, restack checks each branch's copy on origin. If it has commits the local branch never had (the squash commit `merge --collapse` adds on GitHub, say), the run stops and names them so you can pull or cherry-pick them first. Interactive runs ask; `--yes` stops.
 - **Safe pushes.** Pushes use `--force-with-lease --force-if-includes`. A branch whose parent isn't on origin (its push failed or was declined) is held back, since its PR would be diffed against the parent's old history. The run exits 1, and `--resume` retries the pushes, parents first.
+- **Branches below go first.** Run from mid-stack or the top, restack also pushes the branches below the current one whose local commits origin doesn't have yet (you committed on them, or restacked with `--no-push`), so the ones above aren't held back. A branch below that's only behind origin, or was never pushed, is left alone; one whose origin copy has commits you don't is named and skipped, and the branches sitting on it wait until you pull them in. `--no-push` doesn't look at the branches below at all.
 
 #### `sync`
 
