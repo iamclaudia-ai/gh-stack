@@ -107,6 +107,47 @@ describe("restack after the parent was rebased outside gh-stack (#83)", () => {
     expect(await Bun.file(`${tmpDir}/b2.txt`).exists()).toBe(true);
   });
 
+  // #143: `git rev-list docs --not A` is ambiguous when the work tree has a
+  // `docs/` path too. commitsNotIn's trailing `--` makes it a revision; without
+  // it the call fails, comes back empty, and the boundary quietly falls back
+  // to merge-base, which replays A's old commit and conflicts.
+  test("a child named like a path in the tree still gets the reflog boundary", async () => {
+    await createBranch(tmpDir, "A", "main");
+    await makeCommit(tmpDir, "a.txt", "a\n", "A: add a.txt");
+    await createBranch(tmpDir, "docs", "A");
+    await makeCommit(tmpDir, "docs/guide.md", "guide\n", "docs: add the guide");
+    const oldParentTip = await sha("A");
+    await writeMetadata(tmpDir, {
+      version: 2,
+      current_stack: "S",
+      stacks: {
+        S: {
+          description: "",
+          last_branch: "docs",
+          base: "main",
+          branches: { A: { parent: "main" }, docs: { parent: "A" } },
+        },
+      },
+      snapshots: [],
+    });
+    await rebaseParentOutside();
+
+    // Checked out on docs, so `docs/` is in the work tree as restack sees it.
+    await checkout(tmpDir, "docs");
+    expect(await Bun.file(`${tmpDir}/docs/guide.md`).exists()).toBe(true);
+    const m = (await readLibMetadata())!;
+    expect(await resolveRestackBoundary(m, "A", "docs")).toEqual({
+      sha: oldParentTip,
+      source: "reflog",
+    });
+
+    await restack([]);
+
+    expect(await rebaseInProgress()).toBe(false);
+    expect(await count("A..docs")).toBe(1);
+    expect(await Bun.file(`${tmpDir}/a.txt`).text()).toBe("a, reworked\n");
+  });
+
   test("a stale snapshot loses to the parent's newer former tip", async () => {
     // gh-stack last ran while A had one commit; A then got a second commit with
     // plain git, B was built on it, and only then was A rebased outside.

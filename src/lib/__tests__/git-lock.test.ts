@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { $ } from "bun";
 import * as fs from "node:fs/promises";
-import { closeSync, openSync } from "node:fs";
+import { closeSync, openSync, rmSync } from "node:fs";
 import * as git from "../git.ts";
 import { getBranchMembership, setBranchMembership } from "../branch-config.ts";
 import { cleanup, createTempRepo, makeCommit } from "../../__tests__/helpers.ts";
@@ -44,6 +44,33 @@ async function holdLock(file: string, ms: number): Promise<void> {
   await Bun.write(file, "");
   setTimeout(() => fs.rm(file, { force: true }), ms);
 }
+
+/**
+ * Let `file` go the moment gh-stack has failed on it once: the retry loop
+ * announces the wait on stderr after that attempt, before the first retry.
+ * A release timed on the clock can land before the attempt on a loaded
+ * machine, and then nothing waits at all; or it can catch git's own
+ * short-lived lock instead of the test's (#141). Returns whether it fired.
+ */
+function releaseOnFirstRetry(file: string): { fired: boolean } {
+  const state = { fired: false };
+  realConsoleError ??= console.error;
+  const original = realConsoleError;
+  console.error = (...args: unknown[]) => {
+    if (!state.fired && String(args[0]).includes("waiting for it to finish")) {
+      state.fired = true;
+      rmSync(file, { force: true });
+    }
+    original(...args);
+  };
+  return state;
+}
+// The console.error that releaseOnFirstRetry wraps, put back after each test.
+let realConsoleError: typeof console.error | null = null;
+afterEach(() => {
+  if (realConsoleError) console.error = realConsoleError;
+  realConsoleError = null;
+});
 
 /** main gains a commit; `feature` has two of its own, based on the old main. */
 async function divergedFeature(): Promise<void> {
@@ -113,10 +140,12 @@ describe("checkout", () => {
 
   test("a held lock is retried, and the attempts are counted", async () => {
     await $`git branch side`.quiet();
-    await holdLock(indexLock, 250);
+    await Bun.write(indexLock, "");
+    const release = releaseOnFirstRetry(indexLock);
     const result = await git.runGit(["checkout", "side"]);
+    expect(release.fired).toBe(true);
     expect(result.exitCode).toBe(0);
-    expect(result.attempts).toBeGreaterThan(1);
+    expect(result.attempts).toBe(2);
   });
 });
 
@@ -134,22 +163,16 @@ describe("rebase", () => {
     await divergedFeature();
     await $`git checkout -q feature`.quiet();
     // After the first pick, take index.lock once (as a background reader
-    // would) and let it go shortly after. git reschedules the next pick and
-    // pauses; the retry continues the rebase.
+    // would). git reschedules the next pick and pauses; once gh-stack has
+    // failed on the lock, it's let go, and the retry continues the rebase.
+    // (A poller that released the first index.lock it saw could catch git's
+    // own instead, and leave this one held for good: #141.)
     const marker = `${tmpDir}/.git/lock-taken`;
     const takeLockOnce = `test -e ${marker} || { touch ${marker} ${indexLock}; }`;
-    const release = setInterval(async () => {
-      if (await Bun.file(indexLock).exists()) {
-        clearInterval(release);
-        setTimeout(() => fs.rm(indexLock, { force: true }), 250);
-      }
-    }, 10);
-    try {
-      expect(await git.runRebase(["rebase", "-x", takeLockOnce, "main"])).toBe(true);
-    } finally {
-      clearInterval(release);
-    }
+    const release = releaseOnFirstRetry(indexLock);
+    expect(await git.runRebase(["rebase", "-x", takeLockOnce, "main"])).toBe(true);
     expect(await Bun.file(marker).exists()).toBe(true); // the lock really was taken midway
+    expect(release.fired).toBe(true); // and the paused rebase was retried
     expect(await git.isRebaseInProgress()).toBe(false);
     expect(await onMain("feature")).toBe(true);
     expect(await git.commitCount("main", "feature")).toBe(2);
@@ -267,7 +290,8 @@ describe("lock holder", () => {
 
   test("a wait that recovers is logged", async () => {
     await $`git branch side`.quiet();
-    await holdLock(indexLock, 250);
+    await Bun.write(indexLock, "");
+    releaseOnFirstRetry(indexLock);
     await git.checkout("side");
     const [entry, ...rest] = await lockWaits();
     expect(rest).toEqual([]);
@@ -277,7 +301,7 @@ describe("lock holder", () => {
       command: "git checkout side",
       outcome: "recovered",
     });
-    expect(entry!.attempts).toBeGreaterThan(1);
+    expect(entry!.attempts).toBe(2);
     expect(entry!.holder).toBeString();
   });
 

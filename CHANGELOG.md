@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### 🧪 Tests
+- **The lock-retry tests let a held lock go on gh-stack's cue, not on a timer.** Three tests held `index.lock` for 250 ms, or released the first `index.lock` a poller saw. On a loaded machine the first attempt could come after the release (nothing waited, so "attempts > 1" failed), or the poller could catch git's own short-lived lock during a rebase and leave the test's held until gh-stack gave up. They now release the lock when gh-stack announces its first wait, so each attempt count is exact. 48 parallel runs at load ~40 passed. (#141)
+- **Restack's reflog boundary is tested for a branch named like a path** (`docs`, with a `docs/` directory in the tree), which needs `commitsNotIn`'s trailing `--`. (#143)
+- **`doctor`'s and `join`'s re-root advice is tested to name a `develop` trunk**, not `main`. (#147)
+
+### 📝 Docs
+- README and the bundled skill say which PRs get the "Don't merge this PR on GitHub" warning: every PR whose branch doesn't sit on trunk, not "every PR above the bottom one", which was wrong for several PRs on trunk and for a stack on another stack's branch.
+
 ## 0.19.38
 
 ### 🐛 Fixes
