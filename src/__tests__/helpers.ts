@@ -110,33 +110,34 @@ export async function createTempRepo(): Promise<string> {
   return dir;
 }
 
-const listing = async (dir: string) => (await fs.readdir(dir)).toSorted().join("\n");
-const text = (file: string) => fs.readFile(file, "utf8");
+/** Every path under `root`, sorted, with its type and mode, and each file's bytes. */
+async function readTree(root: string): Promise<{ paths: string; files: Map<string, Buffer> }> {
+  const entries = (await fs.readdir(root, { recursive: true })).toSorted();
+  const files = new Map<string, Buffer>();
+  const lines: string[] = [];
+  for (const rel of entries) {
+    const stat = await fs.lstat(`${root}/${rel}`);
+    lines.push(`${rel} ${stat.mode.toString(8)}`);
+    if (stat.isFile()) files.set(rel, await fs.readFile(`${root}/${rel}`));
+  }
+  return { paths: lines.join("\n"), files };
+}
+
+let repoTemplateTree: Promise<Awaited<ReturnType<typeof readTree>>> | undefined;
 
 /**
- * Whether `dir` is still exactly what createTempRepo made: same files, refs,
- * reflog, config and objects as the template, nothing staged or written.
+ * Whether `dir` is still byte for byte what createTempRepo made (every file
+ * under it, .git included, with the same modes), so a stack template can
+ * replace its .git without losing anything a test set up. A suite run had 200
+ * untouched repos here, every one identical to the template, index included.
  */
 async function isUntouchedRepo(dir: string): Promise<boolean> {
-  const template = await repoTemplate();
-  const same = async (rel: string, read: (d: string) => Promise<string>) => {
-    try {
-      return (await read(`${dir}/${rel}`)) === (await read(`${template}/${rel}`));
-    } catch {
-      return false;
-    }
-  };
-  for (const rel of ["", ".git", ".git/refs/heads", ".git/refs/tags", ".git/objects"]) {
-    if (!(await same(rel, listing))) return false;
-  }
-  for (const rel of [
-    "README.md",
-    ".git/HEAD",
-    ".git/config",
-    ".git/refs/heads/main",
-    ".git/logs/HEAD",
-  ]) {
-    if (!(await same(rel, text))) return false;
+  repoTemplateTree ??= repoTemplate().then(readTree);
+  const template = await repoTemplateTree;
+  const actual = await readTree(dir);
+  if (actual.paths !== template.paths) return false;
+  for (const [rel, bytes] of actual.files) {
+    if (!bytes.equals(template.files.get(rel)!)) return false;
   }
   return true;
 }
