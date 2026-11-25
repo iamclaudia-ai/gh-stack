@@ -10,8 +10,8 @@
 // Interactive prompts (text, confirm, select) are unchanged by plain mode —
 // plain mode is about output, not interactivity. Agents already pair --plain
 // with --yes/GH_STACK_YES so the interactive paths aren't reached. If one IS
-// reached with no TTY on stdin, nothing can ever answer it, so we fail fast
-// instead of blocking forever (#33).
+// reached with no TTY on stdin (#33), or from an agent's shell (#123), nothing
+// can ever answer it, so we fail fast instead of blocking forever.
 import * as clack from "@clack/prompts";
 import { clearGitCache } from "./git.ts";
 
@@ -55,14 +55,31 @@ function strip(s: string | undefined): string {
 export const isCancel = clack.isCancel;
 
 /**
- * Exit non-zero instead of prompting when stdin isn't a TTY. A prompt there
- * can never be answered, and it would otherwise hang (holding the repo) past
- * the caller's timeout. (#33)
+ * The environment variable that marks this process as run by a coding agent,
+ * or undefined for a person's shell. Claude Code exports `CLAUDECODE=1` to the
+ * commands it runs, and Anima exports `ANIMA_SESSION_ID` to every agent session
+ * it starts (Codex ones included, which set no `CLAUDECODE`).
+ */
+export function agentMarker(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  if (env.CLAUDECODE) return "CLAUDECODE";
+  if (env.ANIMA_SESSION_ID) return "ANIMA_SESSION_ID";
+  return undefined;
+}
+
+/**
+ * Exit non-zero instead of prompting when nobody can answer: stdin isn't a TTY
+ * (#33), or an agent runs this command (#123). Agents may run commands in a
+ * tmux pane, where stdin is a TTY but no one is typing. Either way the prompt
+ * would otherwise hang (holding the repo) until the caller's timeout kills it.
  */
 function ensureInteractive(message: string): void {
-  if (process.stdin.isTTY) return;
+  const marker = process.stdin.isTTY ? agentMarker() : undefined;
+  if (process.stdin.isTTY && !marker) return;
+  const reason = marker
+    ? `${marker} is set, so an agent is running this and nobody will answer`
+    : "stdin is not a TTY";
   console.error(
-    `gh-stack: refusing to prompt — stdin is not a TTY.\n` +
+    `gh-stack: refusing to prompt — ${reason}.\n` +
       `  Prompt: ${strip(message)}\n` +
       `  Pass --yes (or set GH_STACK_YES=1) to confirm automatically.`,
   );
