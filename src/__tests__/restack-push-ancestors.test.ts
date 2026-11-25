@@ -10,6 +10,8 @@ import {
   createLinearStack,
   makeCommit,
   pushAllBranches,
+  readMetadata,
+  writeMetadata,
 } from "./helpers.ts";
 import {
   addRemote,
@@ -236,5 +238,146 @@ describe("restack pushes the branches below the one it runs from (#126)", () => 
     expect(res.exitCode).toBe(0);
     expect(await remoteSha("pr1")).toBe(theirs);
     expect(await remoteSha("pr3")).toBe(await sha("pr3"));
+  });
+});
+
+/**
+ * Three stacks, each split off a branch of the one below (#154): test-stack is
+ * main → pr1, middle is pr1 → pr2, top is pr2 → pr3. All on origin.
+ */
+async function splitStacks(): Promise<void> {
+  await createLinearStack(tmpDir);
+  await addRemote();
+  await pushAllBranches(tmpDir);
+  const meta = await readMetadata(tmpDir);
+  const all = meta.stacks["test-stack"]!.branches;
+  meta.stacks = {
+    "test-stack": { description: "", last_branch: "pr1", branches: { pr1: all.pr1! } },
+    middle: { description: "", last_branch: "pr2", base: "pr1", branches: { pr2: all.pr2! } },
+    top: { description: "", last_branch: "pr3", base: "pr2", branches: { pr3: all.pr3! } },
+  };
+  meta.current_stack = "top";
+  await writeMetadata(tmpDir, meta);
+}
+
+/** splitStacks, then a commit on pr2 that isn't pushed (the issue's case). */
+async function parentStackAhead(): Promise<void> {
+  await splitStacks();
+  await checkout(tmpDir, "pr2");
+  await makeCommit(tmpDir, "pr2-more.txt", "more\n", "more on pr2");
+  await checkout(tmpDir, "pr3");
+}
+
+function pushOrder(out: string, branches: string[]): number[] {
+  return branches.map((b) => out.indexOf(`Pushed ${b}`));
+}
+
+describe("restack from a split stack pushes the parent stacks' branches below it (#154)", () => {
+  test("a parent stack's branch ahead of origin is pushed first, and the split stack isn't held", async () => {
+    await parentStackAhead();
+    const pr1 = await remoteSha("pr1");
+
+    const res = await runCli(["restack", "--push"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(res.out).not.toContain("Not pushing");
+    expect(res.out).toContain("Origin lags behind pr2 (stack middle), below pr3");
+    const order = pushOrder(res.out, ["pr2", "pr3"]);
+    expect(order.every((i) => i >= 0)).toBe(true);
+    expect(order[0]!).toBeLessThan(order[1]!);
+    for (const b of ["pr2", "pr3"]) expect(await remoteSha(b)).toBe(await sha(b));
+    expect(await remoteSha("pr1")).toBe(pr1);
+    expect(
+      (await $`git -C ${tmpDir} merge-base --is-ancestor pr2 pr3`.nothrow().quiet()).exitCode,
+    ).toBe(0);
+    expect((await savedState())?.finished_at).toBeTruthy();
+  });
+
+  test("the walk goes down through every stack to the trunk, parents first", async () => {
+    await splitStacks();
+    await checkout(tmpDir, "pr1");
+    await makeCommit(tmpDir, "pr1-fix.txt", "fix\n", "fix on pr1");
+    await $`git -C ${tmpDir} rebase -q pr1 pr2`.quiet();
+    await checkout(tmpDir, "pr3");
+
+    const res = await runCli(["restack", "--push"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(res.out).toContain(
+      "Origin lags behind pr1 (stack test-stack), pr2 (stack middle), below pr3",
+    );
+    const order = pushOrder(res.out, ["pr1", "pr2", "pr3"]);
+    expect(order.every((i) => i >= 0)).toBe(true);
+    expect(order.toSorted((a, b) => a - b)).toEqual(order);
+    await allOnOrigin();
+  });
+
+  test("--resume retries a parent stack's branch whose push failed, then the split stack", async () => {
+    await parentStackAhead();
+    await setPreReceive(rejectRef("pr2"));
+
+    const first = await runCli(["restack", "--push"]);
+
+    expect(first.exitCode).toBe(1);
+    expect(first.out).toContain("Not pushing pr3");
+    expect(await remoteSha("pr2")).not.toBe(await sha("pr2"));
+
+    await setPreReceive(null);
+    const resumed = await runCli(["restack", "--resume"]);
+
+    expect(resumed.exitCode).toBe(0);
+    await allOnOrigin();
+  });
+
+  test("a dry run names the parent stack's branch and its stack, and pushes nothing", async () => {
+    await parentStackAhead();
+    const before = await remoteSha("pr2");
+
+    const res = await runCli(["restack", "--push", "--dry-run"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(res.out).toContain("[DRY RUN] Would push pr2 (stack middle) first");
+    expect(await remoteSha("pr2")).toBe(before);
+  });
+
+  test("a parent stack's branch with commits only on origin is named and left alone; the run goes on", async () => {
+    await splitStacks();
+    // Origin's pr1 has a teammate's commit, local pr1 one of ours. pr2 still
+    // matches origin (on the old pr1), and pr3 gains a commit.
+    await createBranch(tmpDir, "teammate", "pr1");
+    await makeCommit(tmpDir, "theirs.txt", "theirs\n", "their commit on pr1");
+    await $`git -C ${tmpDir} push -q origin teammate:refs/heads/pr1`.quiet();
+    const theirs = await remoteSha("pr1");
+    await checkout(tmpDir, "pr1");
+    await makeCommit(tmpDir, "ours.txt", "ours\n", "our commit on pr1");
+    await checkout(tmpDir, "pr3");
+    await makeCommit(tmpDir, "pr3-more.txt", "more\n", "more on pr3");
+
+    const res = await runCli(["restack", "--push"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(res.out).toContain("Not pushing pr1 (origin has commits it lacks), below pr3");
+    expect(await remoteSha("pr1")).toBe(theirs);
+    expect(await remoteSha("pr3")).toBe(await sha("pr3"));
+  });
+
+  test("a parent stack's branch sitting on a skipped one is held, checked against its own stack", async () => {
+    await splitStacks();
+    // Origin's pr1 has a teammate's commit; local pr1 one of ours, and pr2 moved onto it.
+    await createBranch(tmpDir, "teammate", "pr1");
+    await makeCommit(tmpDir, "theirs.txt", "theirs\n", "their commit on pr1");
+    await $`git -C ${tmpDir} push -q origin teammate:refs/heads/pr1`.quiet();
+    await checkout(tmpDir, "pr1");
+    await makeCommit(tmpDir, "ours.txt", "ours\n", "our commit on pr1");
+    await $`git -C ${tmpDir} rebase -q pr1 pr2`.quiet();
+    await checkout(tmpDir, "pr3");
+    const pr2 = await remoteSha("pr2");
+
+    const res = await runCli(["restack", "--push"]);
+
+    expect(res.exitCode).toBe(1);
+    expect(res.out).toContain("Not pushing pr1 (origin has commits it lacks), below pr3");
+    expect(res.out).toContain("Not pushing pr2: its parent pr1 isn't on origin");
+    expect(await remoteSha("pr2")).toBe(pr2);
   });
 });

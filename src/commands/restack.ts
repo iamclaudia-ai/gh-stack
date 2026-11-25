@@ -871,7 +871,7 @@ async function handleResume(
   // Branches below the chain that origin still lags behind are pushed first
   // (#126), whether the run pushed them before it stopped or not.
   const stack = meta.stacks[state.stack_name]!;
-  const below = await branchesToPushBelow(meta, stack, state.chain[0]!, ctx);
+  const below = await branchesToPushBelow(meta, state.chain[0]!, ctx);
 
   // Origin may have moved while the run was stopped.
   await guardRemote(meta, state.chain, ctx.dryRun);
@@ -1001,7 +1001,7 @@ async function handleFreshRestack(
     }
   }
 
-  const below = await branchesToPushBelow(meta, stack, currentBranch, ctx);
+  const below = await branchesToPushBelow(meta, currentBranch, ctx);
 
   // The base branches are force-pushed too, so they're checked with the rest.
   await guardRemote(meta, chain, ctx.dryRun);
@@ -1508,30 +1508,42 @@ async function originLacksLocalTip(branch: string, ctx: ChainContext): Promise<b
   return local !== remote && !(await git.isAncestor(local, remote));
 }
 
+/** A branch below a run's chain, with the stack that holds it. */
+interface BelowBranch {
+  branch: string;
+  stack: string;
+}
+
 /**
- * The branches below `branch` in its stack, root first, whose local tips
- * origin doesn't have (#126). A restack from mid-stack or the top pushes them
- * before its own chain: otherwise every branch above them is held back, and a
- * `--resume`, which retries only its run's chain, never gets past them. One
- * behind origin is left alone (pushing it would drop origin's commits), and so
- * is one with no copy on origin (publishing is `submit`'s job, #24).
+ * The branches below `branch`, root first, whose local tips origin doesn't
+ * have (#126). A restack from mid-stack or the top pushes them before its own
+ * chain: otherwise every branch above them is held back, and a `--resume`,
+ * which retries only its run's chain, never gets past them. One behind origin
+ * is left alone (pushing it would drop origin's commits), and so is one with
+ * no copy on origin (publishing is `submit`'s job, #24).
+ *
+ * The walk goes on through a split stack's base into the stack that holds it,
+ * down to the trunk (#154): a parent stack's branch ahead of origin holds the
+ * split stack back just the same. It stops at a branch no stack holds.
  */
 async function unpublishedAncestors(
-  stack: Stack,
+  meta: StackMetadata,
   branch: string,
   ctx: ChainContext,
-): Promise<string[]> {
-  const base = stackBase(stack);
-  const below: string[] = [];
-  for (
-    let b = stack.branches[branch]?.parent;
-    b && b !== base && stack.branches[b] && b !== branch && !below.includes(b);
-    b = stack.branches[b]?.parent
-  ) {
-    below.unshift(b);
+): Promise<BelowBranch[]> {
+  const below: BelowBranch[] = [];
+  const seen = new Set([branch]);
+  let owner = findStackForBranch(meta, branch);
+  let b = owner ? meta.stacks[owner]!.branches[branch]?.parent : undefined;
+  while (b && !git.isTrunkName(b) && !seen.has(b)) {
+    owner = findStackForBranch(meta, b);
+    if (!owner) break;
+    seen.add(b);
+    below.unshift({ branch: b, stack: owner });
+    b = meta.stacks[owner]!.branches[b]?.parent;
   }
-  const lagging: string[] = [];
-  for (const b of below) if (await originLacksLocalTip(b, ctx)) lagging.push(b);
+  const lagging: BelowBranch[] = [];
+  for (const entry of below) if (await originLacksLocalTip(entry.branch, ctx)) lagging.push(entry);
   return lagging;
 }
 
@@ -1544,16 +1556,15 @@ async function unpublishedAncestors(
  */
 async function branchesToPushBelow(
   meta: StackMetadata,
-  stack: Stack,
   start: string,
   ctx: ChainContext,
-): Promise<string[]> {
+): Promise<BelowBranch[]> {
   if (noPush) return [];
-  const lagging = await unpublishedAncestors(stack, start, ctx);
+  const lagging = await unpublishedAncestors(meta, start, ctx);
   if (lagging.length === 0) return [];
   const { found, cleared, unverified } = await findRemoteOnlyContent(
     (await readMetadata()) ?? meta,
-    lagging,
+    lagging.map((l) => l.branch),
   );
   const blocked = [
     ...found.map((f) => `${pc.yellow(f.branch)} (origin has commits it lacks)`),
@@ -1568,7 +1579,7 @@ async function branchesToPushBelow(
   for (const b of skip) ctx.skippedBelow.add(b);
   // Checked like the guard checks the chain: an explicit lease on that tip.
   for (const [branch, sha] of cleared) verifiedTips.set(branch, sha);
-  return lagging.filter((b) => !skip.has(b));
+  return lagging.filter((l) => !skip.has(l.branch));
 }
 
 /**
@@ -1576,17 +1587,20 @@ async function branchesToPushBelow(
  * parents first, ahead of the chain's own pushes. They stay out of the run's
  * chain: a resume works them out again from the stack as it is then (one
  * pushed by hand meanwhile drops out), and a run from the top doesn't count as
- * having restacked the branches below it.
+ * having restacked the branches below it. A branch of another stack (below a
+ * split stack, #154) is named with its stack.
  */
 async function pushBelow(
   meta: StackMetadata,
   stackName: string,
   start: string,
-  below: string[],
+  below: BelowBranch[],
   ctx: ChainContext,
 ): Promise<void> {
   if (below.length === 0) return;
-  const names = below.map((b) => pc.yellow(b)).join(", ");
+  const names = below
+    .map((b) => pc.yellow(b.branch) + (b.stack === stackName ? "" : ` (stack ${b.stack})`))
+    .join(", ");
   if (ctx.dryRun) {
     p.log.warn(
       `[DRY RUN] Would push ${names} first: origin lags behind ${below.length === 1 ? "it" : "them"}, below ${start}`,
@@ -1597,8 +1611,8 @@ async function pushBelow(
     `Origin lags behind ${names}, below ${start}. Pushing ${below.length === 1 ? "it" : "them"} first, so the branches above aren't held back.`,
   );
   for (const b of below) {
-    ctx.touched.push(b);
-    await pushStep(meta, stackName, b, ctx);
+    ctx.touched.push(b.branch);
+    await pushStep(meta, b.stack, b.branch, ctx);
   }
 }
 

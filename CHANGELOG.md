@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### 🐛 Fixes
+- **`restack --push` from a split stack pushes the parent stacks' branches below it too.** A stack split off another stack's branch (`main → pr1 → pr2`, with `pr3` on `pr2` in a stack of its own) was held back whenever that branch was ahead of origin: you committed on `pr2`, or restacked its stack with `--no-push`, and `restack --push` from `pr3` stopped with "its parent pr2 isn't on origin" and exited 1. 0.19.36 made restack push the branches below its start branch first, but only within its own stack. The walk now goes on through each stack's base into the stack that holds it, down to the trunk, and the log line names their stack: "Origin lags behind pr2 (stack middle), below pr3". The same rules apply as within a stack: a branch only behind origin, or never pushed, is left alone, and one whose origin copy has commits you don't is named and skipped. Nothing in a parent stack is rebased; that's still `restack` run from there. (#154)
+
 ## 0.19.39
 
 ### 🐛 Fixes
