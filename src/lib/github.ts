@@ -316,6 +316,16 @@ export async function deleteBranchOnGitHub(branch: string): Promise<GhResult> {
   return { ok: false, error };
 }
 
+/** A PR's title as it is on GitHub now, or null when it can't be read. */
+export async function getPrTitle(prNumber: number): Promise<string | null> {
+  try {
+    const data = await ghPrViewJson(prNumber, "title");
+    return typeof data?.title === "string" ? data.title : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Get body text for a PR.
  */

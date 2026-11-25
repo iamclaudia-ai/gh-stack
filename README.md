@@ -121,7 +121,7 @@ Branches without a PR at the top of the stack are local work: they aren't counte
 
 - `-d, --draft` / `--no-draft`: open new PRs as drafts, or ready for review. Only affects PRs created by this run. The default comes from `[submit] draft` (see [Configuration](#configuration)).
 - `-n, --no-edit`: don't prompt for titles; generate them from branch names (`--yes` does this too unless `--title` is given)
-- `-t, --title <title>` / `-b, --body <body>`: title or body for the current branch's PR. On an existing PR they update it in place, keeping the `(N/M)` position and the stack section, which `gh pr edit` would wipe.
+- `-t, --title <title>` / `-b, --body <body>`: title or body for the current branch's PR. On an existing PR they update it in place, keeping the `(N/M)` position and the stack section, which `gh pr edit` would wipe. When the run opens PRs (for branches below with none yet), they go to those new PRs only, and the current branch's PR keeps its title and description.
 - `--body-file <f>`: read the body from a file
 - `--existing`: push only the branches that already have PRs, across the whole stack, and open no new PR. Bases, titles and stack sections are still refreshed. Use it to publish after `sync --no-push` or `restack --no-push`. It refuses if a branch without a PR sits under one that has a PR.
 - `--restack`: afterwards, restack the branches above the current one onto it. submit covers downstack, restack covers upstack, so this updates the whole stack from wherever you stand.

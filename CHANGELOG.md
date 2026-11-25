@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### 🐛 Fixes
+- **`submit -t`/`-b` from the top no longer overwrites the top PR when it opens a PR below.** Run from a branch that already had a PR, with a branch below it that had none, the title and description went to the new PR and also replaced the current branch's PR, with nothing said. They now go only to the PRs the run opens; the current branch's PR is updated in place only when the run opens none, and submit says which PR kept its title. (#122)
+- **Renumbering a PR title starts from its title on GitHub, not the cached copy.** When a stack grew or shrank, the `(N/M)` renumbering rebuilt each title from the one gh-stack last set, so a title fixed on GitHub since (say, after the clobber above) was put back. A title about to be renumbered is now read first; titles that aren't changing still cost no call. (#122)
+
 ### 🧪 Tests
 - **The suite runs about a quarter faster and starts a third fewer git processes.** Its cost was git process count, not disk: ~31,000 per run at ~10 ms each, 62% from test fixtures. A fresh test repo took six git commands, and the 3-branch stacks most tests start from took another eleven. They're now built once, with the same commands, and copied per test (shared by every worker and run, and rebuilt when `helpers.ts` changes); a stack is copied only into a repo nothing has touched yet. Branches are created off their parent in one checkout, and `pushAllBranches` pushes in one call. ~21,600 git processes per run; at the same load the suite took 130-136 s instead of 166-185 s. (#138)
 

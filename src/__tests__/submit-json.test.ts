@@ -386,3 +386,100 @@ describe("submit --json (CLI)", () => {
     expect(stdout).not.toContain("\x1b[");
   }, 30_000);
 });
+
+describe("-t/-b belong to the PRs a submit opens (#122)", () => {
+  /** A dir the stub answers `gh pr view <n>` from, holding PR n with this title. */
+  async function viewDir(prs: Record<number, string>): Promise<string> {
+    const dir = `${stubDir}/view`;
+    await fs.mkdir(dir, { recursive: true });
+    for (const [n, title] of Object.entries(prs)) {
+      await Bun.write(
+        `${dir}/${n}.json`,
+        JSON.stringify({ number: Number(n), title, state: "OPEN", url: `https://x/pull/${n}` }),
+      );
+    }
+    return dir;
+  }
+
+  test("from the top, they open the PR below and leave the top's existing PR alone", async () => {
+    const bodies = `${stubDir}/bodies`;
+    await fs.mkdir(bodies);
+    const env = {
+      GH_EXISTING_PR: "feat-b=436",
+      GH_PR_VIEW_DIR: await viewDir({ 436: "Feature B" }),
+      GH_BODY_DIR: bodies,
+    };
+
+    const { stdout, stderr, exitCode } = await runSubmit(
+      ["--json", "-t", "Fix A", "-b", "Why A changes"],
+      env,
+    );
+
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout) as SubmitJson;
+    expect(result.branches.map((b) => [b.branch, b.pr, b.title])).toEqual([
+      ["feat-a", 101, "Fix A (1/2)"],
+      ["feat-b", 436, "Feature B (2/2)"],
+    ]);
+    const calls = await Bun.file(`${stubDir}/calls.log`).text();
+    expect(calls).toContain(
+      "pr create --base main --head feat-a --title Fix A --body Why A changes",
+    );
+    expect(calls).not.toContain("pr edit 436 --title Fix A");
+    expect(await Bun.file(`${bodies}/436.md`).text()).not.toContain("Why A changes");
+    expect(stderr).toContain("-t/-b went to the new PR for feat-a. PR #436 for feat-b keeps");
+  }, 60_000);
+
+  test("a failed create below still keeps -t/-b off the top's PR, and says they went nowhere", async () => {
+    const bodies = `${stubDir}/bodies`;
+    await fs.mkdir(bodies);
+    const env = {
+      GH_EXISTING_PR: "feat-b=436",
+      GH_PR_VIEW_DIR: await viewDir({ 436: "Feature B" }),
+      GH_FAIL_CREATE: "1",
+      GH_BODY_DIR: bodies,
+    };
+
+    const { stderr } = await runSubmit(["--json", "-t", "Fix A", "-b", "Why A"], env);
+
+    const calls = await Bun.file(`${stubDir}/calls.log`).text();
+    expect(calls).not.toContain("pr edit 436 --title Fix A");
+    const body436 = Bun.file(`${bodies}/436.md`);
+    if (await body436.exists()) expect(await body436.text()).not.toContain("Why A");
+    expect(stderr).toContain(
+      "-t/-b were for the new PR for feat-a, which wasn't opened: pass them again when you re-run submit. PR #436 for feat-b keeps",
+    );
+    expect(stderr).not.toContain("went to the new PR");
+  }, 60_000);
+
+  test("renumbering starts from the PR's title on GitHub, not a stale cached one", async () => {
+    expect((await runSubmit(["--json", "-t", "Add things"])).exitCode).toBe(0);
+    // #102's title was fixed on GitHub since; #101's view fails, so its cache stands.
+    const env = { GH_PR_VIEW_DIR: await viewDir({ 102: "Real B (2/2)" }) };
+    await createBranch(tmpDir, "feat-c", "feat-b");
+    await makeCommit(tmpDir, "c.txt", "c\n", "feat-c: add c");
+
+    const { stdout, exitCode } = await runSubmit(["--json", "-t", "Add c"], env);
+
+    expect(exitCode).toBe(0);
+    const result = JSON.parse(stdout) as SubmitJson;
+    expect(result.branches.map((b) => [b.branch, b.title])).toEqual([
+      ["feat-a", "Add things (1/3)"],
+      ["feat-b", "Real B (2/3)"],
+      ["feat-c", "Add c (3/3)"],
+    ]);
+    const calls = await Bun.file(`${stubDir}/calls.log`).text();
+    expect(calls).toContain("pr edit 102 --title Real B (2/3)");
+    expect(calls).not.toContain("Add things (2/3)");
+  }, 60_000);
+
+  test("a re-submit with nothing to renumber reads no titles", async () => {
+    expect((await runSubmit(["--json", "-t", "Add things"])).exitCode).toBe(0);
+    await fs.rm(`${stubDir}/calls.log`);
+
+    expect((await runSubmit(["--json"])).exitCode).toBe(0);
+
+    const calls = await Bun.file(`${stubDir}/calls.log`).text();
+    expect(calls).not.toContain("--json title");
+  }, 60_000);
+});

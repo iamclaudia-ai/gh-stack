@@ -43,8 +43,10 @@ OPTIONS
                        config, or GH_STACK_DRAFT; see gh-stack config)
       --no-draft       Create new PRs ready for review, overriding a draft default
   -n, --no-edit        Don't prompt for PR titles (auto-generate from branch name)
-  -t, --title <title>  Set the PR title (current branch) — creates or updates
-  -b, --body <body>    Set the PR body (current branch) — creates or updates
+  -t, --title <title>  Set the PR title (current branch) — creates or updates.
+                       A run that opens PRs gives them to the new PRs only
+  -b, --body <body>    Set the PR body (current branch) — creates or updates,
+                       as --title does
       --body-file <f>  Read PR body from a file
       --existing       Push only the branches that already have PRs, across the
                        whole stack, and create none. A branch with no PR on top
@@ -468,6 +470,8 @@ async function runSubmit(args: string[], run: RunState, jsonMode: boolean): Prom
   let existing = 0;
   let skipped = 0;
   let metadataChanged = false;
+  /** Branches this run opens a PR for (or tries to): `-t`/`-b` are theirs (#122). */
+  const opening = new Set<string>();
   const outcomes = run.outcomes;
 
   // The branch's PR: recorded in metadata, else looked up on GitHub. A PR
@@ -611,6 +615,7 @@ async function runSubmit(args: string[], run: RunState, jsonMode: boolean): Prom
       }
     } else {
       // ── Create new PR ──
+      opening.add(branchName);
       const defaultTitle = titleFlag || branchToTitle(branchName);
       let title = defaultTitle;
 
@@ -702,6 +707,34 @@ async function runSubmit(args: string[], run: RunState, jsonMode: boolean): Prom
     }
   }
 
+  // `-t`/`-b` name the PRs this run opens. They update the current branch's
+  // existing PR only when the run opens none: run from the top with a new PR
+  // below, they'd otherwise overwrite the top PR's title and body (#122).
+  const retitleCurrent = opening.size === 0 || opening.has(branch);
+  const currentPr = stack.branches[branch]?.pr;
+  if ((titleFlag || bodyFlag) && !retitleCurrent && currentPr != null) {
+    const names = (bs: string[]) => bs.map((b) => pc.blue(b)).join(", ");
+    const prs = (bs: string[]) => `PR${bs.length === 1 ? "" : "s"}`;
+    const opened = [...opening].filter(
+      (b) => dryRun || outcomes.find((o) => o.branch === b)?.created,
+    );
+    const failed = [...opening].filter((b) => !opened.includes(b));
+    const said: string[] = [];
+    if (opened.length > 0) {
+      said.push(
+        `-t/-b ${dryRun ? "would go" : "went"} to the new ${prs(opened)} for ${names(opened)}.`,
+      );
+    }
+    if (failed.length > 0) {
+      said.push(
+        `-t/-b were for the new ${prs(failed)} for ${names(failed)}, which ${failed.length === 1 ? "wasn't" : "weren't"} opened: pass them again when you re-run submit.`,
+      );
+    }
+    p.log.info(
+      `${said.join(" ")} PR #${currentPr} for ${pc.blue(branch)} keeps its title and description; to change them, run submit -t/-b on ${branch} when there's no new PR to open.`,
+    );
+  }
+
   p.print();
 
   if (dryRun) {
@@ -720,15 +753,16 @@ async function runSubmit(args: string[], run: RunState, jsonMode: boolean): Prom
   // render locally and only hit the network for PRs that actually changed
   // (see issue #16), so a no-op re-submit is free. ──
   // `-t`/`-b` (and `--body-file`) update the PR for the branch you're on, even
-  // if it already exists — title is renumbered, body is replaced with the viz
-  // block re-merged. This makes `submit` the one tool to update a PR without
-  // `gh pr edit` clobbering the `📚 Stacked on` block.
+  // if it already exists (unless this run opened another PR, above): title is
+  // renumbered, body is replaced with the viz block re-merged. This makes
+  // `submit` the one tool to update a PR without `gh pr edit` clobbering the
+  // `📚 Stacked on` block.
   p.log.info(pc.cyan("Updating PR titles & stack visualization..."));
   const titles = await reconcilePrTitles(stack, ordered, {
-    titleOverrides: titleFlag ? { [branch]: titleFlag } : undefined,
+    titleOverrides: titleFlag && retitleCurrent ? { [branch]: titleFlag } : undefined,
   });
   const viz = await refreshStackViz(meta, stack, ordered, {
-    bodyOverrides: bodyFlag ? { [branch]: bodyFlag } : undefined,
+    bodyOverrides: bodyFlag && retitleCurrent ? { [branch]: bodyFlag } : undefined,
   });
 
   run.edited = new Set([...titles.updatedBranches, ...viz.updatedBranches]);
