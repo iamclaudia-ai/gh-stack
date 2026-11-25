@@ -6,6 +6,7 @@ import {
   findStackForBranch,
   getOrderedBranches,
   getChildren,
+  buildRebaseChain,
   writeMetadata,
 } from "../lib/metadata.ts";
 import { ensureMetadata, checkoutOrExit } from "../lib/safety.ts";
@@ -19,8 +20,9 @@ gh-stack top — Jump to the tip of the stack
 USAGE
   gh-stack top
 
-Switches to the topmost (leaf) branch of the current stack.
-Prompts if there are multiple leaf branches.
+Switches to the tip (a branch with no children) above the current branch.
+Asks when several tips sit above it; with --yes it stops instead (exit 1),
+naming them. On a tip already, it stays there.
 `);
     return;
   }
@@ -37,8 +39,10 @@ Prompts if there are multiple leaf branches.
   const stack = meta.stacks[stackName]!;
   const ordered = getOrderedBranches(stack);
 
-  // Find leaf branches (no children)
-  const leaves = ordered.filter((b) => getChildren(stack, b).length === 0);
+  // The tips above the current branch: its descendants (or itself) with no
+  // children. A tip on another fork isn't above it, so it isn't offered.
+  const above = new Set(buildRebaseChain(stack, currentBranch));
+  const leaves = ordered.filter((b) => above.has(b) && getChildren(stack, b).length === 0);
 
   if (leaves.length === 0) {
     p.log.warn("No branches in stack");
@@ -53,7 +57,7 @@ Prompts if there are multiple leaf branches.
       stack,
       "Multiple tips — which branch?",
       leaves,
-      "The stack has several tips",
+      `Several tips sit above ${currentBranch}`,
     );
   }
 
