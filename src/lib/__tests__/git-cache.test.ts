@@ -44,7 +44,7 @@ const KINDS: Kind[] = ["refs", "branches", "head", "config", "worktrees", "remot
 const describeHeads = (heads: Map<string, string>) =>
   [...heads]
     .map(([branch, sha]) => `${branch}=${sha}`)
-    .sort()
+    .toSorted()
     .join(" ");
 
 async function ask(): Promise<Answers> {
@@ -223,6 +223,169 @@ describe("git answer cache", () => {
   });
 });
 
+/** The git commands `fn` runs, from GIT_TRACE (`$` reads process.env per call). */
+async function gitRuns(fn: () => Promise<unknown>): Promise<string[]> {
+  const trace = `${tmpDir}-trace.log`;
+  process.env.GIT_TRACE = trace;
+  try {
+    await fn();
+  } finally {
+    delete process.env.GIT_TRACE;
+  }
+  const text = await Bun.file(trace)
+    .text()
+    .catch(() => "");
+  await cleanup(trace);
+  return [...text.matchAll(/built-in: git (.*)$/gm)].map((m) => m[1]!);
+}
+
+// Branch tips and existence come from one `git for-each-ref` per run, until a
+// write moves a ref (#151). It has to say what `git rev-parse` would.
+describe("the ref snapshot", () => {
+  /** A repo where names collide: git's lookup order decides which ref wins. */
+  async function collidingRefs(): Promise<void> {
+    await addOrigin();
+    await $`git checkout -q -b side`.quiet();
+    await makeCommit(tmpDir, "side.txt", "side\n", "side");
+    await $`git checkout -q main`.quiet();
+    await $`git push -q origin side`.quiet();
+    await $`git fetch -q origin`.quiet();
+    await $`git remote set-head origin main`.quiet();
+    await $`git branch dup main`.quiet();
+    await $`git tag dup side`.quiet(); // a tag beats a branch of the same name
+    await $`git tag -a atag -m annotated main`.quiet(); // the tag object, not the commit
+    await $`git branch origin/side main`.quiet(); // a branch beats a remote-tracking ref
+    await $`git branch deadbee side`.quiet(); // hex-looking, but a ref first
+    await $`git branch heads/side main`.quiet(); // refs/heads/side, not refs/heads/heads/side
+    // A full object id is read as one, even where a branch has it as its name,
+    // in either case (only the upper-case one: the filesystem may fold case).
+    const main = (await $`git rev-parse main`.text()).trim();
+    const side = (await $`git rev-parse side`.text()).trim();
+    await $`git update-ref refs/heads/${main} side`.quiet();
+    await $`git update-ref refs/heads/${side.toUpperCase()} main`.quiet();
+    // An all-caps name is looked for in the git dir first.
+    await $`git update-ref ORIG_HEAD main`.quiet();
+    await $`git update-ref refs/heads/ORIG_HEAD side`.quiet();
+  }
+
+  test("resolves each name the way git rev-parse does", async () => {
+    await collidingRefs();
+    const main = (await $`git rev-parse main`.text()).trim();
+    const side = (await $`git rev-parse side`.text()).trim();
+    // Short names, qualified ones, full refs, then what only git can answer.
+    const names = [
+      "main",
+      "side",
+      "dup",
+      "atag",
+      "origin/main",
+      "origin/side",
+      "origin",
+      "deadbee",
+      "heads/side",
+      "heads/dup",
+      "tags/dup",
+      "remotes/origin/side",
+      "refs/heads/origin/side",
+      "refs/tags/atag",
+      "refs/remotes/origin/HEAD",
+      "HEAD",
+      "ORIG_HEAD",
+      "side~1",
+      "side^{tree}",
+      main,
+      side.toUpperCase(),
+      side.slice(0, 9),
+      "missing",
+      "refs/heads/missing",
+      "side..main",
+      "-q",
+    ];
+    const truth = async (name: string) => {
+      const r = await $`git rev-parse ${name}`.quiet().nothrow();
+      return r.exitCode === 0 ? r.stdout.toString().trim() : "fails";
+    };
+    const verify = async (name: string) =>
+      (await $`git rev-parse --verify --quiet ${name}`.quiet().nothrow()).exitCode === 0;
+    git.setGitCache(true);
+    for (const name of names) {
+      const cached = await git.revParse(name).catch(() => "fails");
+      expect([name, cached]).toEqual([name, await truth(name)]);
+      expect([name, await git.refExists(name)]).toEqual([name, await verify(name)]);
+    }
+    for (const name of ["main", "side", "dup", "origin/side", "origin/main", "atag", "missing"]) {
+      const shown = await $`git show-ref --verify --quiet refs/heads/${name}`.quiet().nothrow();
+      expect([name, await git.localBranchExists(name)]).toEqual([name, shown.exitCode === 0]);
+    }
+  });
+
+  test("one for-each-ref answers every branch until a write", async () => {
+    await collidingRefs();
+    git.setGitCache(true);
+    const names = [
+      "main",
+      "side",
+      "dup",
+      "origin/main",
+      "deadbee",
+      "origin",
+      "refs/remotes/origin/side",
+    ];
+    const runs = await gitRuns(async () => {
+      for (const name of names) {
+        await git.revParse(name);
+        await git.localBranchExists(name);
+        await git.refExists(name);
+      }
+    });
+    expect(runs).toEqual(["for-each-ref '--format=%(objectname) %(refname)'"]);
+    // A ref moved behind the cache's back isn't seen: the snapshot is the answer...
+    await $`git branch made`.quiet();
+    expect(await git.localBranchExists("made")).toBe(false);
+    // ...until a write gh-stack makes drops it.
+    await git.runGitOrThrow(["tag", "probe-tag"]);
+    expect(await git.localBranchExists("made")).toBe(false); // branch answers survive a tag
+    expect(await git.revParse("made")).toBe(await git.revParse("main"));
+    await git.runGitOrThrow(["branch", "made-too"]);
+    expect(await git.localBranchExists("made")).toBe(true);
+  });
+
+  test("off, each lookup asks git itself", async () => {
+    await collidingRefs();
+    const runs = await gitRuns(async () => {
+      await git.revParse("side");
+      await git.localBranchExists("side");
+    });
+    expect(runs).toEqual(["rev-parse side", "show-ref --verify --quiet refs/heads/side"]);
+  });
+});
+
+describe("the repo's own paths", () => {
+  test("come from one rev-parse", async () => {
+    git.setGitCache(true);
+    const raw = async (flag: string) => (await $`git rev-parse ${flag}`.text()).trim();
+    const runs = await gitRuns(async () => {
+      expect(await git.gitDir()).toBe(await raw("--git-dir"));
+      expect(await git.absoluteGitDir()).toBe(await raw("--absolute-git-dir"));
+      expect(await git.repoRoot()).toBe(await raw("--show-toplevel"));
+    });
+    const mine = runs.filter((r) => r.startsWith("rev-parse --git-dir --"));
+    expect(mine).toEqual(["rev-parse --git-dir --absolute-git-dir --show-toplevel"]);
+    expect(runs.length).toBe(4); // that one and the three raw reads
+  });
+
+  test("in a bare repo, ask one at a time (there's no worktree root)", async () => {
+    await addOrigin();
+    process.chdir(`${tmpDir}-origin`);
+    git.setGitCache(true);
+    expect(await git.gitDir()).toBe(".");
+    expect(await git.absoluteGitDir()).toBe(
+      (await $`git rev-parse --absolute-git-dir`.text()).trim(),
+    );
+    expect(git.repoRoot()).rejects.toThrow();
+  });
+});
+
 // Every write must reach the cache: through runGit, or reported with
 // noteGitWrite (git.ts's own push). A raw `$\`git <write>\`` anywhere else
 // would leave stale answers behind it.
@@ -248,7 +411,7 @@ describe("raw git writes", () => {
   // gh-stack also changes origin through GitHub: a PR merge moves trunk, an
   // API delete removes a branch. The cached ls-remote answer has to go too.
   test("changes made through GitHub are reported with noteRemoteChange", async () => {
-    const GH_WRITE = /\$`gh pr merge |\["pr", "merge"|--method DELETE/;
+    const GH_WRITE = /\$`gh pr merge |"pr", "merge"|(?:-X|--method) DELETE/;
     const root = path.resolve(import.meta.dir, "../..");
     const offenders: string[] = [];
     let writes = 0;
@@ -259,9 +422,12 @@ describe("raw git writes", () => {
         lines.forEach((line, i) => {
           if (!GH_WRITE.test(line)) return;
           writes++;
-          // Reported within the next few lines, once gh has returned.
-          const after = lines.slice(i + 1, i + 9).join("\n");
-          if (!after.includes("noteRemoteChange()")) {
+          // Reported within the next few lines, once gh has returned, and
+          // before any `return`: a report only on the failure path won't do.
+          const next = lines.slice(i + 1, i + 9);
+          const report = next.findIndex((l) => l.includes("noteRemoteChange()"));
+          const exit = next.findIndex((l) => /\breturn\b/.test(l));
+          if (report === -1 || (exit !== -1 && exit < report)) {
             offenders.push(`${dir}/${file}:${i + 1}: ${line.trim()}`);
           }
         });

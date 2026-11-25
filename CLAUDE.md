@@ -38,10 +38,14 @@ bun run test             # Run tests (8 files in parallel, ~1 min)
 
 - Use `Bun.spawn` / `Bun.spawnSync` for git/gh commands
 - The CLI caches git lookups for the run (`currentBranch`, `revParse`, `localBranchExists`,
-  `listWorktrees`, branch config, git dir; see "Per-run cache" in `src/lib/git.ts`, #108).
+  `refExists`, `listWorktrees`, branch config, git dir, origin's branches from `ls-remote`;
+  see "Per-run cache" in `src/lib/git.ts`, #108, #151). Branch tips and existence come from
+  one `for-each-ref` snapshot per run until a write moves a ref.
   Every git **write** must go through `runGit`/`runRebase` (or call `noteGitWrite` right
   after), or later lookups return stale answers. `git-cache.test.ts` fails on a raw
   `` $`git <write>` `` outside `git.ts`. A new git subcommand gets a case in `changedBy`.
+  A change to origin made through GitHub (`gh pr merge`, an API ref delete) calls
+  `noteRemoteChange()` before any `return`; the same test checks that too.
 - All user-facing output goes through `@clack/prompts` or `picocolors`
 - Never modify metadata without reading it fresh first (avoid stale state)
 - Metadata lives under `.git/.gh-stack/` (v3: per-stack files + git branch config; never committed). The old v2 `.git/gh-stack-metadata.json` monolith is migrated by `gh-stack doctor`. See `src/lib/metadata.ts`, `src/lib/paths.ts`, `src/lib/branch-config.ts`.

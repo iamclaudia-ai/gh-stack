@@ -484,7 +484,11 @@ export async function isGitRepo(): Promise<boolean> {
  * Get the path to the .git directory (handles worktrees too).
  */
 export async function gitDir(): Promise<string> {
-  const result = await cached("repo", "git-dir", () => $`git rev-parse --git-dir`.quiet().text());
+  const result = await cached(
+    "repo",
+    "git-dir",
+    async () => (await repoFact(0)) ?? $`git rev-parse --git-dir`.quiet().text(),
+  );
   return result.trim();
 }
 
@@ -493,8 +497,11 @@ export async function gitDir(): Promise<string> {
  * the main checkout, which can't identify a worktree from another one.
  */
 export async function absoluteGitDir(cwd?: string): Promise<string> {
-  const result = await cached("repo", `absolute-git-dir ${cwd ?? ""}`, () =>
-    inDir($`git rev-parse --absolute-git-dir`, cwd).text(),
+  const result = await cached(
+    "repo",
+    `absolute-git-dir ${cwd ?? ""}`,
+    async () =>
+      (cwd ? null : await repoFact(1)) ?? inDir($`git rev-parse --absolute-git-dir`, cwd).text(),
   );
   return result.trim();
 }
@@ -503,8 +510,29 @@ export async function absoluteGitDir(cwd?: string): Promise<string> {
  * Get the absolute path to the repository's working-tree root.
  */
 export async function repoRoot(): Promise<string> {
-  const result = await cached("repo", "toplevel", () => $`git rev-parse --show-toplevel`.text());
+  const result = await cached(
+    "repo",
+    "toplevel",
+    async () => (await repoFact(2)) ?? $`git rev-parse --show-toplevel`.text(),
+  );
   return result.trim();
+}
+
+/**
+ * Line `i` of `git rev-parse --git-dir --absolute-git-dir --show-toplevel`,
+ * asked once for all three: a run wanted two or three of them, one git
+ * process each (#151). Null with the cache off (there's nothing to share it
+ * with), or where git can't answer all three (a bare repo has no worktree
+ * root), so the caller asks for its own.
+ */
+async function repoFact(i: number): Promise<string | null> {
+  if (!cacheOn) return null;
+  const facts = await cached("repo", "facts", async () => {
+    const r = await $`git rev-parse --git-dir --absolute-git-dir --show-toplevel`.quiet().nothrow();
+    const lines = r.stdout.toString().split("\n");
+    return r.exitCode === 0 && lines.length > 3 ? lines.slice(0, 3) : null;
+  });
+  return facts?.[i] ?? null;
 }
 
 /**
@@ -597,8 +625,64 @@ export async function ghStackBranchConfig(): Promise<string> {
  * Get the SHA of a ref.
  */
 export async function revParse(ref: string): Promise<string> {
-  const result = await cached("refs", ref, () => $`git rev-parse ${ref}`.text());
+  const result = await cached(
+    "refs",
+    ref,
+    async () => (await refFromSnapshot(ref)) ?? $`git rev-parse ${ref}`.text(),
+  );
   return result.trim();
+}
+
+/**
+ * Every ref and the object it points at, from one `git for-each-ref`, kept
+ * until a write moves a ref. A run looked up branch after branch, one git
+ * process each (`rev-parse <branch>`, `show-ref --verify`), and asked again
+ * after every write (#151). Shared, so never changed by a caller.
+ */
+function refSnapshot(): Promise<Map<string, string>> {
+  // ":" can't be in a ref name, so this key can't collide with revParse's.
+  return cached("refs", ":snapshot", async () => {
+    const out = await $`git for-each-ref ${"--format=%(objectname) %(refname)"}`.quiet().text();
+    const refs = new Map<string, string>();
+    for (const line of out.split("\n")) {
+      const space = line.indexOf(" ");
+      if (space > 0) refs.set(line.slice(space + 1), line.slice(0, space));
+    }
+    return refs;
+  });
+}
+
+/** The places git looks for a short name, in its order (gitrevisions(7)). */
+const REF_RULES = [
+  "refs/%",
+  "refs/tags/%",
+  "refs/heads/%",
+  "refs/remotes/%",
+  "refs/remotes/%/HEAD",
+];
+
+/**
+ * What `git rev-parse <name>` would say, read from the ref snapshot; null
+ * when the snapshot can't say for sure, so git is asked. A name no ref
+ * matches goes to git: revision syntax (`main~1`, `a..b`, `@{u}`) or an
+ * abbreviated object id. Two kinds of name go to git even when a ref
+ * matches: a full object id (either case), which git reads as one before any
+ * ref, and an all-caps name like ORIG_HEAD, which git looks for in the git
+ * dir first. (On a case-insensitive filesystem, a branch named `head` or
+ * `orig_head` finds those files too; nobody names a branch that.)
+ */
+async function refFromSnapshot(name: string): Promise<string | null> {
+  if (!cacheOn) return null;
+  // Revision syntax can't match a ref; this only spares the snapshot a read.
+  if (!/^[A-Za-z0-9._][A-Za-z0-9._/-]*$/.test(name)) return null;
+  if (/^[0-9a-f]{40}$|^[0-9a-f]{64}$/i.test(name) || /^[A-Z_]+$/.test(name)) return null;
+  const refs = await refSnapshot();
+  if (name.startsWith("refs/") && refs.has(name)) return refs.get(name)!;
+  for (const rule of REF_RULES) {
+    const sha = refs.get(rule.replace("%", name));
+    if (sha) return sha;
+  }
+  return null;
 }
 
 /**
@@ -916,6 +1000,8 @@ export async function remoteBranchExists(branch: string): Promise<boolean> {
  */
 export async function localBranchExists(branch: string): Promise<boolean> {
   return cached("branches", branch, async () => {
+    // Every write that can add or remove a branch also drops the snapshot.
+    if (cacheOn) return (await refSnapshot()).has(`refs/heads/${branch}`);
     const { exitCode } = await $`git show-ref --verify --quiet refs/heads/${branch}`
       .nothrow()
       .quiet();
@@ -969,6 +1055,7 @@ export async function deleteTagsMatching(pattern: string): Promise<void> {
  * Whether a ref (branch, tag, remote-tracking ref, or any revision) resolves.
  */
 export async function refExists(ref: string): Promise<boolean> {
+  if ((await refFromSnapshot(ref)) !== null) return true;
   const { exitCode } = await $`git rev-parse --verify --quiet ${ref}`.nothrow().quiet();
   return exitCode === 0;
 }
