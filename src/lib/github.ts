@@ -1,5 +1,8 @@
 // GitHub CLI (gh) helpers
 import { $ } from "bun";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { PrInfo, PrStatus } from "../types.ts";
 import { isTrunkName } from "./git.ts";
 import { retryWait } from "./retry-delay.ts";
@@ -226,19 +229,23 @@ export async function getMyOpenPrs(): Promise<PrStatus[]> {
 }
 
 /**
- * Update a PR's body (description).
+ * Update a PR's body (description). The body goes through a file in a temp
+ * dir of this call's own: a name shared by PR number let two gh-stack runs
+ * (two repos, or parallel tests) post each other's description, or fail the
+ * cleanup and report a successful edit as failed (#174).
  */
 export async function updatePrBody(prNumber: number, body: string): Promise<boolean> {
+  let dir: string | null = null;
   try {
-    // Write to a temp file to avoid shell escaping issues
-    const tmpFile = `${await import("node:os").then((os) => os.tmpdir())}/gh-stack-pr-body-${prNumber}.md`;
-    await Bun.write(tmpFile, body);
-    await $`gh pr edit ${prNumber} --body-file ${tmpFile}`.quiet();
-    const { unlink } = await import("node:fs/promises");
-    await unlink(tmpFile);
+    dir = await mkdtemp(join(tmpdir(), "gh-stack-pr-body-"));
+    const file = join(dir, `${prNumber}.md`);
+    await Bun.write(file, body);
+    await $`gh pr edit ${prNumber} --body-file ${file}`.quiet();
     return true;
   } catch {
     return false;
+  } finally {
+    if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 }
 

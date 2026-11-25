@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### 🐛 Fixes
+- **Two gh-stack runs at once can no longer post each other's PR descriptions.** Every description edit went through `$TMPDIR/gh-stack-pr-body-<N>.md`, named only by PR number, so two runs editing PRs with the same number (in two repos, say, or two agents' sessions) shared the file: one could send the other's description, and its cleanup could fail and report an edit that went through as failed (`submit --json` then counted that PR `updated` on the next no-op run). Each edit now writes to a temp dir of its own, removed afterwards whether the edit worked or not. (#174)
+
 ### 🧪 Tests
 - **The fake `gh` records a PR base with a slash, and fails when it can't record one.** `PR_BASE_STUB`'s `pr edit --base` wrote the new base with an unescaped `sed`, so a base like `feat/mid` broke the expression: the base was never stored, yet the edit exited 0. It now escapes the name and fails when the write fails, and `pr list --base` matches the name exactly rather than as a pattern. No test moved a PR onto a slashed branch before; one does now. (#171)
 
