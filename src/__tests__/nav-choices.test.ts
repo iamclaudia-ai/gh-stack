@@ -128,6 +128,8 @@ describe("up and top at a fork name the branches instead of saying to pass --yes
       "Several branches sit on pr1: pr2, side. Go to one with gh-stack checkout <branch>.",
     );
     expect(res.out).not.toContain("Pass --yes");
+    // --yes stops before any prompt: in a person's terminal one would appear.
+    expect(res.out).not.toContain("refusing to prompt");
     expect(await currentBranch()).toBe("pr1");
   });
 
@@ -163,6 +165,7 @@ describe("up and top at a fork name the branches instead of saying to pass --yes
     expect(res.out).toContain(
       "The stack has several tips: pr3, side. Go to one with gh-stack checkout <branch>.",
     );
+    expect(res.out).not.toContain("refusing to prompt");
     expect(await currentBranch()).toBe("pr1");
   });
 
