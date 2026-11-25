@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.19.45
 
 ### ⚡ Performance
 - **`restack`, `sync`, `merge` and `join` ask origin for its branches once per run, until they change it.** Each `git ls-remote --heads origin` is a network round trip (0.75 s on a repo with 3,800 remote branches), and a restack asked twice with no push in between: once to check origin for commits the restack would drop, once for the tips it pushes against. The answer is now kept for the run, and dropped when gh-stack pushes, fetches or pulls, merges a PR, or deletes a branch through the GitHub API, so the check after a push still reads origin afresh (#23). Across the test suite, `ls-remote` calls went from 444 to 293 (restack 199 to 100). (#151)
