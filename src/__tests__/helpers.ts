@@ -4,24 +4,196 @@ import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import type { StackMetadata } from "../types.ts";
 
+// ── Templates (#138) ──
+//
+// The suite's cost is git process count, not disk (~31k git processes per run,
+// 62% of them from these fixtures). A fresh repo took six (init, two config
+// writes, add, commit, branch -M) and the 3-branch stacks another eleven, so
+// each is built once, with the same git commands, and copied per call. A copy
+// keeps git's own reflogs (restack reads them, #83). The index's stat info goes
+// stale with the copy's new mtimes, which git notices and re-checks, so the
+// tree stays clean. Copies share their commits' shas, as repos made within the
+// same second did.
+//
+// Templates are shared by every test process and run: parallel workers run
+// each file in its own process (--isolate) and exit without "exit" handlers,
+// so per-process templates were left behind. A process that finds a template
+// missing builds it in a dir of its own and renames that into place; rename is
+// atomic, so a template that exists is complete, and when two processes race,
+// the loser drops its copy. The names carry a hash of this file, so editing a
+// recipe starts new templates instead of reusing stale ones.
+//
+// They live in node_modules/.cache, not /tmp: macOS deletes /tmp files nobody
+// has read for three days, which would leave a template's dirs standing with
+// its files gone, and a template that exists is trusted.
+
+const TEMPLATE_ROOT = path.join(
+  import.meta.dir,
+  "../../node_modules/.cache/gh-stack-test-templates",
+);
+
+let recipeHash: Promise<string> | undefined;
+const builtTemplates = new Map<string, Promise<string>>();
+
+async function sharedTemplate(
+  name: string,
+  build: (dir: string) => Promise<void>,
+): Promise<string> {
+  let template = builtTemplates.get(name);
+  if (!template) {
+    template = buildSharedTemplate(name, build);
+    builtTemplates.set(name, template);
+  }
+  return template;
+}
+
+async function buildSharedTemplate(
+  name: string,
+  build: (dir: string) => Promise<void>,
+): Promise<string> {
+  recipeHash ??= Bun.file(import.meta.path)
+    .text()
+    .then((source) => Bun.hash(source).toString(36));
+  const target = path.join(TEMPLATE_ROOT, `${await recipeHash}-${name}`);
+  if (await exists(target)) return target;
+
+  await fs.mkdir(TEMPLATE_ROOT, { recursive: true });
+  const work = await fs.mkdtemp(path.join(TEMPLATE_ROOT, "build-"));
+  try {
+    await build(work);
+  } catch (error) {
+    await fs.rm(work, { recursive: true, force: true });
+    throw error;
+  }
+  try {
+    await fs.rename(work, target);
+  } catch {
+    // Another process got there first (the target exists and isn't empty).
+    await fs.rm(work, { recursive: true, force: true });
+  }
+  return target;
+}
+
+async function exists(file: string): Promise<boolean> {
+  try {
+    await fs.stat(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function repoTemplate(): Promise<string> {
+  return sharedTemplate("repo", async (dir) => {
+    await $`git init ${dir}`.quiet();
+    await $`git -C ${dir} config user.email "test@test.com"`.quiet();
+    await $`git -C ${dir} config user.name "Test"`.quiet();
+    await Bun.write(`${dir}/README.md`, "# Test Repo\n");
+    await $`git -C ${dir} add .`.quiet();
+    await $`git -C ${dir} commit -m "initial commit"`.quiet();
+    await $`git -C ${dir} branch -M main`.quiet();
+  });
+}
+
+async function copyInto(template: string, dir: string): Promise<void> {
+  await fs.cp(template, dir, { recursive: true });
+}
+
 /**
  * Create a temp git repo with an initial commit on main.
  * Returns the directory path. Caller must clean up.
  */
 export async function createTempRepo(): Promise<string> {
+  const template = await repoTemplate();
   const dir = await fs.mkdtemp(path.join(await fs.realpath("/tmp"), "gh-stack-test-"));
-
-  await $`git init ${dir}`.quiet();
-  await $`git -C ${dir} config user.email "test@test.com"`.quiet();
-  await $`git -C ${dir} config user.name "Test"`.quiet();
-
-  // Initial commit on main
-  await Bun.write(`${dir}/README.md`, "# Test Repo\n");
-  await $`git -C ${dir} add .`.quiet();
-  await $`git -C ${dir} commit -m "initial commit"`.quiet();
-  await $`git -C ${dir} branch -M main`.quiet();
-
+  await copyInto(template, dir);
   return dir;
+}
+
+/** Every path under `root`, sorted, with its type and mode, and each file's bytes. */
+async function readTree(root: string): Promise<{ paths: string; files: Map<string, Buffer> }> {
+  const entries = (await fs.readdir(root, { recursive: true })).toSorted();
+  const files = new Map<string, Buffer>();
+  const lines: string[] = [];
+  for (const rel of entries) {
+    const stat = await fs.lstat(`${root}/${rel}`);
+    lines.push(`${rel} ${stat.mode.toString(8)}`);
+    if (stat.isFile()) files.set(rel, await fs.readFile(`${root}/${rel}`));
+  }
+  return { paths: lines.join("\n"), files };
+}
+
+let repoTemplateTree: Promise<Awaited<ReturnType<typeof readTree>>> | undefined;
+
+/**
+ * Whether `dir` is still byte for byte what createTempRepo made (every file
+ * under it, .git included, with the same modes), so a stack template can
+ * replace its .git without losing anything a test set up. A suite run had 200
+ * untouched repos here, every one identical to the template, index included.
+ */
+async function isUntouchedRepo(dir: string): Promise<boolean> {
+  repoTemplateTree ??= repoTemplate().then(readTree);
+  const template = await repoTemplateTree;
+  const actual = await readTree(dir);
+  if (actual.paths !== template.paths) return false;
+  for (const [rel, bytes] of actual.files) {
+    if (!bytes.equals(template.files.get(rel)!)) return false;
+  }
+  return true;
+}
+
+/**
+ * Build a stack in `dir` from a template when `dir` is untouched; otherwise
+ * run the recipe in it. Returns the branches' shas either way.
+ */
+async function stackFromTemplate(
+  dir: string,
+  name: string,
+  recipe: (dir: string) => Promise<void>,
+  branches: string[],
+): Promise<Record<string, string>> {
+  if (await isUntouchedRepo(dir)) {
+    const template = await sharedTemplate(name, async (work) => {
+      await copyInto(await repoTemplate(), work);
+      await recipe(work);
+    });
+    await fs.rm(`${dir}/.git`, { recursive: true, force: true });
+    await copyInto(template, dir);
+  } else {
+    await recipe(dir);
+  }
+  const shas: Record<string, string> = {};
+  for (const branch of branches) shas[branch] = await branchSha(dir, branch);
+  return shas;
+}
+
+/** A branch's sha from its loose ref file, or from git when it isn't one. */
+async function branchSha(dir: string, branch: string): Promise<string> {
+  try {
+    const sha = (await fs.readFile(`${dir}/.git/refs/heads/${branch}`, "utf8")).trim();
+    if (/^[0-9a-f]{40}$/.test(sha)) return sha;
+  } catch {
+    // fall through to git
+  }
+  return getSha(dir, `refs/heads/${branch}`);
+}
+
+/**
+ * The sha HEAD points at, read from the ref files when HEAD is a loose branch
+ * ref or detached in a plain repo. Anything else (a linked worktree's .git
+ * file, a packed ref) asks git.
+ */
+async function headSha(dir: string): Promise<string> {
+  try {
+    const head = (await fs.readFile(`${dir}/.git/HEAD`, "utf8")).trim();
+    const sha = head.startsWith("ref: ")
+      ? (await fs.readFile(`${dir}/.git/${head.slice(5)}`, "utf8")).trim()
+      : head;
+    if (/^[0-9a-f]{40}$/.test(sha)) return sha;
+  } catch {
+    // fall through to git
+  }
+  return (await $`git -C ${dir} rev-parse HEAD`.text()).trim();
 }
 
 /**
@@ -36,18 +208,18 @@ export async function makeCommit(
   await Bun.write(`${dir}/${filename}`, content);
   await $`git -C ${dir} add ${filename}`.quiet();
   await $`git -C ${dir} commit -m ${message}`.quiet();
-  const sha = (await $`git -C ${dir} rev-parse HEAD`.text()).trim();
-  return sha;
+  return headSha(dir);
 }
 
 /**
- * Create a branch in a temp repo.
+ * Create a branch in a temp repo (off `from`, or HEAD) and check it out.
  */
 export async function createBranch(dir: string, name: string, from?: string): Promise<void> {
   if (from) {
-    await $`git -C ${dir} checkout ${from}`.quiet();
+    await $`git -C ${dir} checkout -b ${name} ${from}`.quiet();
+  } else {
+    await $`git -C ${dir} checkout -b ${name}`.quiet();
   }
-  await $`git -C ${dir} checkout -b ${name}`.quiet();
 }
 
 /**
@@ -219,29 +391,41 @@ export async function createLinearStack(
   meta: StackMetadata;
   shas: Record<string, string>;
 }> {
-  const shas: Record<string, string> = {};
+  const name = opts?.conflicting ? "linear-conflicting" : "linear";
+  const shas = await stackFromTemplate(dir, name, (d) => linearStackRecipe(d, opts), [
+    "main",
+    "pr1",
+    "pr2",
+    "pr3",
+  ]);
+  return { meta: linearStackMeta(), shas };
+}
 
-  // main already has initial commit
-  shas.main = await getSha(dir, "main");
-
+async function linearStackRecipe(dir: string, opts?: { conflicting?: boolean }): Promise<void> {
   // PR1: branch off main
   await createBranch(dir, "pr1", "main");
   if (opts?.conflicting) {
-    shas.pr1 = await makeCommit(dir, "shared.txt", "pr1 version\n", "pr1: shared file");
+    await makeCommit(dir, "shared.txt", "pr1 version\n", "pr1: shared file");
   } else {
-    shas.pr1 = await makeCommit(dir, "pr1.txt", "pr1 content\n", "pr1: add file");
+    await makeCommit(dir, "pr1.txt", "pr1 content\n", "pr1: add file");
   }
 
   // PR2: branch off pr1
   await createBranch(dir, "pr2", "pr1");
-  shas.pr2 = await makeCommit(dir, "pr2.txt", "pr2 content\n", "pr2: add file");
+  await makeCommit(dir, "pr2.txt", "pr2 content\n", "pr2: add file");
 
   // PR3: branch off pr2
   await createBranch(dir, "pr3", "pr2");
-  shas.pr3 = await makeCommit(dir, "pr3.txt", "pr3 content\n", "pr3: add file");
+  await makeCommit(dir, "pr3.txt", "pr3 content\n", "pr3: add file");
 
-  // Write metadata
-  const meta: StackMetadata = {
+  await writeMetadata(dir, linearStackMeta());
+
+  // Go back to main
+  await checkout(dir, "main");
+}
+
+function linearStackMeta(): StackMetadata {
+  return {
     version: 2,
     current_stack: "test-stack",
     stacks: {
@@ -256,13 +440,6 @@ export async function createLinearStack(
       },
     },
   };
-
-  await writeMetadata(dir, meta);
-
-  // Go back to main
-  await checkout(dir, "main");
-
-  return { meta, shas };
 }
 
 /**
@@ -274,27 +451,39 @@ export async function createBranchingStack(dir: string): Promise<{
   meta: StackMetadata;
   shas: Record<string, string>;
 }> {
-  const shas: Record<string, string> = {};
+  const shas = await stackFromTemplate(dir, "branching", branchingStackRecipe, [
+    "main",
+    "pr1",
+    "pr2a",
+    "pr2b",
+    "pr3",
+  ]);
+  return { meta: branchingStackMeta(), shas };
+}
 
-  shas.main = await getSha(dir, "main");
-
+async function branchingStackRecipe(dir: string): Promise<void> {
   // PR1: branch off main
   await createBranch(dir, "pr1", "main");
-  shas.pr1 = await makeCommit(dir, "pr1.txt", "pr1 content\n", "pr1: add file");
+  await makeCommit(dir, "pr1.txt", "pr1 content\n", "pr1: add file");
 
   // PR2a: branch off pr1
   await createBranch(dir, "pr2a", "pr1");
-  shas.pr2a = await makeCommit(dir, "pr2a.txt", "pr2a content\n", "pr2a: add file");
+  await makeCommit(dir, "pr2a.txt", "pr2a content\n", "pr2a: add file");
 
   // PR2b: branch off pr1
   await createBranch(dir, "pr2b", "pr1");
-  shas.pr2b = await makeCommit(dir, "pr2b.txt", "pr2b content\n", "pr2b: add file");
+  await makeCommit(dir, "pr2b.txt", "pr2b content\n", "pr2b: add file");
 
   // PR3: branch off pr2b
   await createBranch(dir, "pr3", "pr2b");
-  shas.pr3 = await makeCommit(dir, "pr3.txt", "pr3 content\n", "pr3: add file");
+  await makeCommit(dir, "pr3.txt", "pr3 content\n", "pr3: add file");
 
-  const meta: StackMetadata = {
+  await writeMetadata(dir, branchingStackMeta());
+  await checkout(dir, "main");
+}
+
+function branchingStackMeta(): StackMetadata {
+  return {
     version: 2,
     current_stack: "tree-stack",
     stacks: {
@@ -310,11 +499,6 @@ export async function createBranchingStack(dir: string): Promise<{
       },
     },
   };
-
-  await writeMetadata(dir, meta);
-  await checkout(dir, "main");
-
-  return { meta, shas };
 }
 
 /**
@@ -333,25 +517,22 @@ export async function addConflictingMainCommit(
  * Simulate an "origin/main" by creating a bare remote and pushing.
  */
 export async function setupRemote(dir: string): Promise<string> {
+  const bare = await sharedTemplate("bare", async (d) => {
+    await $`git init --bare ${d}`.quiet();
+  });
   const remoteDir = await fs.mkdtemp(path.join(await fs.realpath("/tmp"), "gh-stack-remote-"));
-  await $`git init --bare ${remoteDir}`.quiet();
+  await copyInto(bare, remoteDir);
   await $`git -C ${dir} remote add origin ${remoteDir}`.quiet();
   await $`git -C ${dir} push -u origin main`.quiet();
   return remoteDir;
 }
 
 /**
- * Push all branches to remote.
+ * Push all branches to remote, each with its upstream set. One push: a
+ * rejected branch doesn't stop the others, as one push per branch didn't.
  */
 export async function pushAllBranches(dir: string): Promise<void> {
-  const branches = (await $`git -C ${dir} branch --format='%(refname:short)'`.text())
-    .trim()
-    .split("\n")
-    .filter(Boolean);
-
-  for (const branch of branches) {
-    await $`git -C ${dir} push -u origin ${branch}`.quiet().nothrow();
-  }
+  await $`git -C ${dir} push -u origin --all`.quiet().nothrow();
 }
 
 /**

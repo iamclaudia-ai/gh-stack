@@ -73,9 +73,25 @@ For automated tests, create temp git repos with fabricated branch structures.
 
 Run the suite with `bun run test`, not bare `bun test`: bare `bun test` runs the
 files one at a time (~6 min), and bunfig.toml has no setting for `--parallel`.
-8 workers is faster than one per core: the tests spawn ~32,000 git processes,
+8 workers is faster than one per core: the tests spawn ~22,000 git processes,
 and with 16 workers they contend in the kernel. Run a single file with
 `bun test <path>` as usual.
+
+The suite's cost is git process count, not disk (#138): a git process costs
+~10 ms, and `core.fsync=none` made no difference. So `helpers.ts` builds its
+fixtures once and copies them: `createTempRepo`, `setupRemote`'s bare repo and
+the 3-branch stacks (`createLinearStack`, `createBranchingStack`) come from
+templates in `node_modules/.cache/gh-stack-test-templates/<hash of helpers.ts>-<name>`,
+built with the same git commands and shared by every worker and run (not in
+`/tmp`, which macOS empties of files unread for three days). A stack helper
+copies its template only into a repo still exactly as `createTempRepo` made it,
+and otherwise runs its recipe. A new fixture used in many tests can take the
+same route (`sharedTemplate`). Copy, don't fake: templates are real git repos
+with git's own reflogs, which restack reads (#83). To count git processes, put
+a `git` shim first on PATH that appends its parent's command line
+(`ps -o command= -p $PPID`) and its arguments to a log, then `exec`s the real
+git. The parent tells the test worker (fixtures, in-process commands) from a
+spawned CLI.
 
 The test timeout is 30 s, but Bun scopes `setDefaultTimeout` to a file.
 `bun run test`'s parallel workers run the preload for each file (`--isolate`),
