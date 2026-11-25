@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.19.35
 
 ### 🐛 Fixes
 - **Re-running `merge --base` or `sync` after resolving a re-root conflict finishes the re-root instead of doing it again.** The re-run fetches the trunk again, and on a busy repo the trunk has moved on by then, so the branch you'd just re-rooted no longer held `origin/main` and was taken for one still on the merged branch. Its re-root base then fell back to the old fork point on main, and the rebase replayed every main commit since (31 commits in one case, 130 in another), most dropped as already upstream, the rest conflicting. A branch that holds the merged PR's squash commit now counts as re-rooted, however far the trunk has moved: it's pushed and its PR retargeted as is, and `sync`'s own rebase then moves it onto the new trunk. That push no longer fails its lease either: `sync` leased on the tip origin had before the re-root's push, as dropping collapsed branches already avoided. (#132)
