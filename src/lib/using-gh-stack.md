@@ -274,7 +274,9 @@ branch without a PR sits under one that has a PR, it stops before pushing
 anything and names the branch: run `submit` from that branch first.
 
 **`submit -t`/`-b` also updates an existing PR in place** — pass them while on a
-branch that already has a PR to change just that one (visualization-safe).
+branch that already has a PR to change just that one (visualization-safe). That
+only happens when the run opens no PR: if a branch below has none yet, `-t`/`-b`
+go to its new PR and the current branch's PR keeps its title and description.
 
 **`--restack`** chains a restack after submit. `submit` owns DOWNSTACK (trunk →
 current); `restack` owns UPSTACK (the children). Together they're the everyday

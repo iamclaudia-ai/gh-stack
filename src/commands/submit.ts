@@ -43,8 +43,10 @@ OPTIONS
                        config, or GH_STACK_DRAFT; see gh-stack config)
       --no-draft       Create new PRs ready for review, overriding a draft default
   -n, --no-edit        Don't prompt for PR titles (auto-generate from branch name)
-  -t, --title <title>  Set the PR title (current branch) — creates or updates
-  -b, --body <body>    Set the PR body (current branch) — creates or updates
+  -t, --title <title>  Set the PR title (current branch) — creates or updates.
+                       A run that opens PRs gives them to the new PRs only
+  -b, --body <body>    Set the PR body (current branch) — creates or updates,
+                       as --title does
       --body-file <f>  Read PR body from a file
       --existing       Push only the branches that already have PRs, across the
                        whole stack, and create none. A branch with no PR on top
