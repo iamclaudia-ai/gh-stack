@@ -4,6 +4,7 @@ import pc from "picocolors";
 import * as git from "../lib/git.ts";
 import { findStackForBranch, getChildren, writeMetadata } from "../lib/metadata.ts";
 import { ensureMetadata, checkoutOrExit } from "../lib/safety.ts";
+import { chooseBranch } from "../lib/ui.ts";
 
 export default async function up(args: string[]): Promise<void> {
   if (args.includes("--help")) {
@@ -52,20 +53,12 @@ OPTIONS
     if (children.length === 1) {
       target = children[0]!;
     } else {
-      // Multiple children — prompt
-      const result = await p.select({
-        message: "Multiple children — which branch?",
-        options: children.map((c) => ({
-          value: c,
-          label: c,
-          hint: stack.branches[c]?.pr ? `#${stack.branches[c]!.pr}` : undefined,
-        })),
-      });
-      if (p.isCancel(result)) {
-        p.cancel("Cancelled");
-        process.exit(0);
-      }
-      target = result as string;
+      target = await chooseBranch(
+        stack,
+        "Multiple children — which branch?",
+        children,
+        `Several branches sit on ${currentBranch}`,
+      );
     }
 
     currentBranch = target;

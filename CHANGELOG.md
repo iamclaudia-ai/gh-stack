@@ -4,6 +4,9 @@
 
 ### 🐛 Fixes
 - **`delete` says when a child PR it moved onto the trunk needs a new push for its checks.** Deleting a branch moves its children's PRs onto its parent before the branch goes (#112), but nothing pushes the children (their commits are kept, not rebased). A PR moved onto the trunk that way had its last checks run against the deleted branch, so a check the trunk requires stays "Expected — Waiting for status to be reported". `delete` now prints the same note `restack`, `submit` and `join` do since 0.19.39: "PR #N's checks last ran against X, not main: a check main requires waits until B is pushed again". (#162)
+- **`checkout <branch>` switches to that branch, and an argument `checkout` can't use exits 1.** `checkout` only understood a stack position, so `gh-stack checkout c --yes` ignored the name, skipped the picker (under `--yes`) and exited 0 on the old branch, which an agent reads as a switch. It now takes a branch name from any stack (switching stacks with it). A name no stack holds, an unknown option or a second argument exits 1 with what `checkout` takes. (#159)
+- **The `checkout`, `checkout --stack`, `delete` and `split` pickers exit 1 under `--yes`**, saying what to pass instead, where they printed "Cancelled" and exited 0. (#159)
+- **`up` at a fork and `top` with several tips name the branches and `gh-stack checkout <branch>` instead of saying to pass `--yes`.** Their "which branch?" prompt was reached even under `--yes`, and from an agent or without a TTY it refused with "Pass --yes", which the caller had already done. Under `--yes` they now stop with exit 1: "Several branches sit on a: b, c. Go to one with gh-stack checkout <branch>", and the refusal with nobody to answer says the same. (#158)
 
 ## 0.19.41
 
@@ -16,7 +19,7 @@
 ## 0.19.40
 
 ### 🐛 Fixes
-- **`restack --push` from a split stack pushes the parent stacks' branches below it too.** A stack split off another stack's branch (`main → pr1 → pr2`, with `pr3` on `pr2` in a stack of its own) was held back whenever that branch was ahead of origin: you committed on `pr2`, or restacked its stack with `--no-push`, and `restack --push` from `pr3` stopped with "its parent pr2 isn't on origin" and exited 1. 0.19.36 made restack push the branches below its start branch first, but only within its own stack. The walk now goes on through each stack's base into the stack that holds it, down to the trunk, and the log line names their stack: "Origin lags behind pr2 (stack middle), below pr3". The same rules apply as within a stack: a branch only behind origin, or never pushed, is left alone, and one whose origin copy has commits you don't is named and skipped. Nothing in a parent stack is rebased; that's still `restack` run from there. (#154)
+- **`restack --push` from a split stack pushes the parent stacks' branches below it too.** A stack split off another stack's branch (stack `api` is `main → pr1 → pr2`, and stack `ui` has `pr3` on `pr2`) was held back whenever that branch was ahead of origin: you committed on `pr2`, or restacked its stack with `--no-push`, and `restack --push` from `pr3` stopped with "its parent pr2 isn't on origin" and exited 1. 0.19.36 made restack push the branches below its start branch first, but only within its own stack. The walk now goes on through each stack's base into the stack that holds it, down to the trunk, and the log line names their stack: "Origin lags behind pr2 (stack api), below pr3". The same rules apply as within a stack: a branch only behind origin, or never pushed, is left alone, and one whose origin copy has commits you don't is named and skipped. Nothing in a parent stack is rebased; that's still `restack` run from there. (#154)
 
 ## 0.19.39
 

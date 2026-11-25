@@ -109,13 +109,26 @@ export function footer(title: string): void {
 }
 
 /**
+ * Stop with exit 1 where a picker would ask under --yes: --yes can't choose,
+ * and a "Cancelled" exit 0 reads as success to an agent (#159). `instead`
+ * says what to pass.
+ */
+function refuseToPick(message: string, instead: string): never {
+  const lead = message.endsWith("?") ? message : `${message}:`;
+  p.cancel(`${lead} --yes can't choose for you. ${instead}`);
+  process.exit(1);
+}
+
+/**
  * Interactive branch selector for a stack.
- * Returns the selected branch name, or null if cancelled.
+ * Returns the selected branch name, or null if cancelled. Under --yes it exits
+ * 1, telling the caller to name the branch (`instead`, or a generic hint).
  */
 export async function selectBranch(
   stack: Stack,
   message: string,
   currentBranch?: string,
+  instead = "Name the branch as an argument.",
 ): Promise<string | null> {
   const ordered = getOrderedBranches(stack);
 
@@ -124,11 +137,7 @@ export async function selectBranch(
     return null;
   }
 
-  // In auto-yes mode, can't select — return null (caller should use explicit args)
-  if (_autoYes) {
-    p.log.warn("Interactive selection skipped (--yes mode). Use explicit arguments.");
-    return null;
-  }
+  if (_autoYes) refuseToPick(message, instead);
 
   const options = ordered.map((name) => {
     const branch = stack.branches[name]!;
@@ -141,10 +150,7 @@ export async function selectBranch(
     return { value: name, label, hint };
   });
 
-  const result = await p.select({
-    message,
-    options,
-  });
+  const result = await p.select({ message, options }, instead);
 
   if (p.isCancel(result)) return null;
   return result as string;
@@ -162,11 +168,8 @@ export async function selectStack(meta: StackMetadata, message: string): Promise
     return null;
   }
 
-  // In auto-yes mode, can't select — return null
-  if (_autoYes) {
-    p.log.warn("Interactive selection skipped (--yes mode). Use explicit arguments.");
-    return null;
-  }
+  const instead = `Switch to a branch of the stack instead: ${pc.green("gh-stack checkout <branch>")}.`;
+  if (_autoYes) refuseToPick(message, instead);
 
   const options = stackNames.map((name) => {
     const stack = meta.stacks[name]!;
@@ -178,12 +181,40 @@ export async function selectStack(meta: StackMetadata, message: string): Promise
     return { value: name, label, hint };
   });
 
-  const result = await p.select({
-    message,
-    options,
-  });
+  const result = await p.select({ message, options }, instead);
 
   if (p.isCancel(result)) return null;
+  return result as string;
+}
+
+/**
+ * Pick one of several branches `up`/`top` could go to (#158). --yes can't
+ * choose, so under --yes (or with nobody to answer) it stops with exit 1,
+ * naming them and the command that goes straight to one.
+ */
+export async function chooseBranch(
+  stack: Stack,
+  message: string,
+  branches: string[],
+  what: string,
+): Promise<string> {
+  const instead = `${what}: ${branches.join(", ")}. Go to one with ${pc.green("gh-stack checkout <branch>")}.`;
+  if (_autoYes) refuseToPick(message, instead);
+  const result = await p.select(
+    {
+      message,
+      options: branches.map((b) => ({
+        value: b,
+        label: b,
+        hint: stack.branches[b]?.pr ? `#${stack.branches[b]!.pr}` : undefined,
+      })),
+    },
+    `--yes can't choose a branch. ${instead}`,
+  );
+  if (p.isCancel(result)) {
+    p.cancel("Cancelled");
+    process.exit(0);
+  }
   return result as string;
 }
 
