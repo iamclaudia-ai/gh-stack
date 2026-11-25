@@ -161,7 +161,7 @@ async function migrateIfNeeded(): Promise<boolean> {
 
   // Backfill base for stacks written before the split feature.
   for (const stack of [...Object.values(stacks), ...Object.values(archive)]) {
-    if (stack.base == null) stack.base = "main";
+    if (stack.base == null) stack.base = git.defaultTrunk();
   }
 
   const meta: StackMetadata = {
@@ -274,7 +274,7 @@ async function flagMergedBaseStacks(meta: StackMetadata): Promise<void> {
 
   for (const [name, stack] of Object.entries(meta.stacks)) {
     const base = stackBase(stack);
-    if (base === "main" || base === "master") continue; // trunk-rooted: not affected
+    if (git.isTrunkName(base)) continue; // trunk-rooted: not affected
 
     const baseExists = await git.localBranchExists(base);
     if (!baseExists) {
@@ -310,12 +310,12 @@ async function flagMergedBaseStacks(meta: StackMetadata): Promise<void> {
   if (flagged.length === 0) return;
 
   console.log();
-  p.log.warn("Stacks whose base appears merged into main:");
+  p.log.warn(`Stacks whose base appears merged into ${trunk}:`);
   for (const { stack, reason } of flagged) {
     console.log(`  ${pc.yellow("⚠")} ${pc.yellow(stack)} — ${reason}`);
   }
   console.log();
-  console.log(`  ${pc.dim("Re-root each onto main once its parent has merged:")}`);
+  console.log(`  ${pc.dim(`Re-root each onto ${trunk} once its parent has merged:`)}`);
   console.log(`    ${pc.green("gh-stack checkout <stack>")}`);
-  console.log(`    ${pc.green("gh-stack restack --onto main")}`);
+  console.log(`    ${pc.green(`gh-stack restack --onto ${trunk}`)}`);
 }

@@ -64,7 +64,7 @@ export async function resolveBaseRef(
   nwo: string | null,
 ): Promise<BaseRef> {
   const base = stackBase(stack);
-  if (isTrunkName(base)) return { label: base };
+  if (git.isTrunkName(base)) return { label: base };
 
   const ownerName = findStackForBranch(meta, base);
   const prNumber = ownerName ? (meta.stacks[ownerName]?.branches[base]?.pr ?? null) : null;
@@ -76,21 +76,17 @@ export async function resolveBaseRef(
   };
 }
 
-function isTrunkName(branch: string): boolean {
-  return branch === "main" || branch === "master";
-}
-
 /** Follow stack bases down from a split stack's base branch to the trunk. */
 function splitStackTrunk(meta: StackMetadata, base: string): string {
   let branch = base;
   const seen = new Set<string>();
-  while (!isTrunkName(branch) && !seen.has(branch)) {
+  while (!git.isTrunkName(branch) && !seen.has(branch)) {
     seen.add(branch);
     const owner = findStackForBranch(meta, branch);
     if (!owner) break;
     branch = stackBase(meta.stacks[owner]!);
   }
-  return isTrunkName(branch) ? branch : "main";
+  return git.isTrunkName(branch) ? branch : git.defaultTrunk();
 }
 
 /**

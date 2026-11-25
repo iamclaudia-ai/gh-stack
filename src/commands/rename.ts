@@ -53,7 +53,7 @@ export default async function rename(args: string[]): Promise<void> {
     p.cancel("Old and new names are identical — nothing to do.");
     process.exit(1);
   }
-  if (newName === "main" || newName === "master") {
+  if (git.isTrunkName(newName)) {
     p.cancel(`Refusing to rename a branch to ${pc.red(newName)}.`);
     process.exit(1);
   }

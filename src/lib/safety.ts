@@ -188,27 +188,6 @@ export async function checkoutOrExit(branch: string): Promise<void> {
 }
 
 /**
- * Ensure we're not on main.
- */
-export async function ensureNotOnMain(): Promise<void> {
-  const branch = await git.currentBranch();
-  if (branch === "main" || branch === "master") {
-    p.cancel(`Cannot run this command on ${pc.red(branch)}`);
-    process.exit(1);
-  }
-}
-
-/**
- * Guard against force-pushing main.
- */
-export function ensureNotMain(branch: string): void {
-  if (branch === "main" || branch === "master") {
-    p.cancel(`${pc.red("REFUSED:")} Cannot force-push ${pc.red(branch)}`);
-    process.exit(1);
-  }
-}
-
-/**
  * Validate stack metadata before destructive operations.
  */
 export async function validateStack(

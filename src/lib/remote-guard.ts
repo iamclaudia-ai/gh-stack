@@ -64,7 +64,7 @@ export async function findRemoteOnlyContent(
 
   const targets: { branch: string; local: string; remote: string }[] = [];
   for (const branch of new Set(branches)) {
-    if (branch === trunk || branch === "main" || branch === "master") continue;
+    if (git.isTrunkName(branch)) continue;
     const remote = heads.get(branch);
     if (!remote || !(await git.localBranchExists(branch))) continue;
     const local = await git.revParse(branch);

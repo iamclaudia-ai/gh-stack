@@ -381,7 +381,7 @@ async function runSubmit(args: string[], run: RunState, jsonMode: boolean): Prom
   if (!stackName) {
     const trunk = await git.trunkBranch();
 
-    if (branch === trunk || branch === "main" || branch === "master") {
+    if (git.isTrunkName(branch)) {
       throw new SubmitAbort(
         `You're on ${pc.blue(branch)} — nothing to submit.\n\n  Checkout a feature branch first.`,
       );
@@ -427,8 +427,7 @@ async function runSubmit(args: string[], run: RunState, jsonMode: boolean): Prom
         `No stack found — created ${pc.yellow(stackName)} from ${heal.chain.length} local branch(es)`,
       );
     } else if (heal.added.length > 0) {
-      const baseNote =
-        heal.base === "main" || heal.base === "master" ? "" : ` (base: ${heal.base})`;
+      const baseNote = git.isTrunkName(heal.base) ? "" : ` (base: ${heal.base})`;
       p.log.success(
         `Adopted ${heal.added.length} untracked branch(es) into ${pc.yellow(stackName)}${pc.dim(baseNote)}`,
       );

@@ -113,6 +113,7 @@ const caches = new Map<CacheKind, Map<string, Promise<unknown>>>();
 export function setGitCache(on: boolean): void {
   cacheOn = on;
   caches.clear();
+  knownTrunk = null;
 }
 
 /**
@@ -1359,6 +1360,11 @@ export async function localBranchTips(): Promise<Map<string, string>> {
  * even with a stale local `main` beside it, when origin's HEAD is set (#134).
  */
 export async function trunkBranch(): Promise<string> {
+  knownTrunk = await resolveTrunk();
+  return knownTrunk;
+}
+
+async function resolveTrunk(): Promise<string> {
   // ":" can't appear in a ref name, so this key never meets revParse's.
   return cached("refs", ":trunk", async () => {
     const { stdout, exitCode } = await $`git symbolic-ref --quiet refs/remotes/origin/HEAD`
@@ -1381,9 +1387,30 @@ export async function trunkBranch(): Promise<string> {
   });
 }
 
-/** Whether `name` is a trunk: `main`, `master`, or this repo's trunk. */
+/**
+ * The trunk `trunkBranch()` last resolved, for the checks that can't wait on
+ * git. The CLI resolves it before running any command in a repo (index.ts).
+ */
+let knownTrunk: string | null = null;
+
+/**
+ * Whether `name` is a trunk: `main`, `master`, or this repo's trunk (a default
+ * branch such as `develop`, #135). Synchronous: it reads the trunk resolved at
+ * startup, so call `trunkBranch()` (or `isTrunk`) first outside the CLI.
+ */
+export function isTrunkName(name: string): boolean {
+  return name === "main" || name === "master" || name === knownTrunk;
+}
+
+/** The repo's trunk as resolved at startup, else "main". */
+export function defaultTrunk(): string {
+  return knownTrunk ?? "main";
+}
+
+/** `isTrunkName`, resolving the trunk first. */
 export async function isTrunk(name: string): Promise<boolean> {
-  return name === "main" || name === "master" || name === (await trunkBranch());
+  await trunkBranch();
+  return isTrunkName(name);
 }
 
 /**
