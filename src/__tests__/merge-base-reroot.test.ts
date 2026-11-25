@@ -643,6 +643,27 @@ describe("a retarget that lands after the push says the checks need a new push (
     expect(res.out).toContain(note);
   });
 
+  test("restack: a move that fails before the push and lands after it gets the note", async () => {
+    await githubSquashesPr1();
+    await checkout(tmpDir, "pr1");
+    expect((await runCli(["merge", "--base", "--no-push"])).exitCode).toBe(0);
+    await logPushes();
+    // setPrBase tries three times: all of them before the push fail.
+    await Bun.write(`${binDir}/edit-2.fails`, "3");
+    await fs.rm(`${binDir}/gh.log`);
+    await checkout(tmpDir, "pr2");
+
+    const res = await runCli(["restack", "--push"]);
+
+    expect(res.exitCode).toBe(0);
+    const calls = await ghCalls();
+    const pushed = calls.indexOf("push pr2");
+    expect(pushed).toBeGreaterThan(-1);
+    expect(calls.lastIndexOf("pr edit 2 --base main")).toBeGreaterThan(pushed);
+    expect(JSON.parse(await Bun.file(`${binDir}/2.json`).text()).baseRefName).toBe("main");
+    expect(res.out).toContain(note);
+  });
+
   test("a retarget made before the push gets no note", async () => {
     await githubSquashesPr1();
     await logPushes();
