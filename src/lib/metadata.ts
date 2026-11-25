@@ -230,16 +230,16 @@ export async function nearestTrackedAncestorStack(
  * the `base` field existed.
  */
 export function stackBase(stack: Stack): string {
-  return stack.base ?? "main";
+  return stack.base ?? git.defaultTrunk();
 }
 
 /** Ensure every stack has an explicit `base` (in-memory only). */
 function backfillStackBase(meta: StackMetadata): void {
   for (const stack of Object.values(meta.stacks)) {
-    if (stack.base == null) stack.base = "main";
+    if (stack.base == null) stack.base = git.defaultTrunk();
   }
   for (const stack of Object.values(meta.archive ?? {})) {
-    if (stack.base == null) stack.base = "main";
+    if (stack.base == null) stack.base = git.defaultTrunk();
   }
 }
 
@@ -576,7 +576,7 @@ export async function createStack(
   meta: StackMetadata,
   name: string,
   description: string,
-  base: string = "main",
+  base: string = git.defaultTrunk(),
 ): Promise<StackMetadata> {
   meta.stacks[name] = {
     description,

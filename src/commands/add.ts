@@ -65,7 +65,7 @@ EXAMPLES
   }
 
   const trunk = await git.trunkBranch();
-  if (branch === trunk || branch === "main" || branch === "master") {
+  if (git.isTrunkName(branch)) {
     p.cancel(
       `${pc.yellow(branch)} is the trunk — nothing to add.\n\n  Checkout a feature branch first.`,
     );
@@ -107,7 +107,7 @@ EXAMPLES
 
   const stack = meta.stacks[resolution.stackName]!;
   const base = stackBase(stack);
-  const baseNote = base === "main" || base === "master" ? "" : ` ${pc.dim(`(base: ${base})`)}`;
+  const baseNote = git.isTrunkName(base) ? "" : ` ${pc.dim(`(base: ${base})`)}`;
 
   if (resolution.created) {
     p.log.success(
@@ -184,7 +184,7 @@ async function addUnderParent(
     p.cancel(`A branch can't be its own parent.`);
     process.exit(1);
   }
-  if (parent === trunk || parent === "main" || parent === "master") {
+  if (git.isTrunkName(parent)) {
     p.cancel(
       `--parent is for stacking on a feature branch. To root ${pc.yellow(branch)} at ${trunk}, run ${pc.green("gh-stack add")} without --parent.`,
     );

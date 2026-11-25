@@ -1,5 +1,6 @@
 // TUI helpers: tree rendering, formatting, prompts
 import * as p from "./output.ts";
+import * as git from "./git.ts";
 import pc from "picocolors";
 import type { Stack, StackMetadata } from "../types.ts";
 import { getOrderedBranches, stackBase } from "./metadata.ts";
@@ -33,7 +34,7 @@ export function renderStackTree(
   const lines: string[] = [];
 
   const base = stackBase(stack);
-  const baseIsTrunk = base === "main" || base === "master";
+  const baseIsTrunk = git.isTrunkName(base);
   const baseHint = baseIsTrunk ? "" : pc.dim(" (base — in parent stack)");
   lines.push(`${pc.green("◯")} ${base}${baseHint}`);
 

@@ -352,7 +352,7 @@ async function buildPlan(
   },
 ): Promise<JoinPlan> {
   const { incoming, above, noPush, startBranch, trunk } = opts;
-  if (incoming === trunk || incoming === "main" || incoming === "master") {
+  if (git.isTrunkName(incoming)) {
     fail(`${pc.yellow(incoming)} is the trunk — it can't join a stack.`);
   }
   if (!(await git.localBranchExists(incoming))) {
@@ -372,7 +372,7 @@ async function buildPlan(
   }
 
   // Which stack: the one --above names, else the current branch's.
-  const aboveIsBase = above !== undefined && isTrunkName(above);
+  const aboveIsBase = above !== undefined && git.isTrunkName(above);
   const anchor = above !== undefined && !aboveIsBase ? above : startBranch;
   let stackName = anchor ? findStackForBranch(meta, anchor) : null;
   if (!stackName && above !== undefined && !aboveIsBase) {
@@ -409,7 +409,7 @@ async function buildPlan(
   const dependent = Object.entries(meta.stacks).find(([, s]) => stackBase(s) === incoming);
   if (dependent) {
     fail(
-      `Stack ${pc.yellow(dependent[0])} is built on ${pc.yellow(incoming)}; joining would rewrite its base.\n\n  Re-root that stack first (${pc.green("gh-stack restack --onto main")} from it).`,
+      `Stack ${pc.yellow(dependent[0])} is built on ${pc.yellow(incoming)}; joining would rewrite its base.\n\n  Re-root that stack first (${pc.green(`gh-stack restack --onto ${trunk}`)} from it).`,
     );
   }
 
@@ -431,7 +431,7 @@ async function buildPlan(
   // which is only well-defined if they sit on that parent's tip. Trunk-parented
   // roots may lag main — that's sync's business and the fork point is still exact.
   for (const child of children) {
-    if (!isTrunkName(newParent) && !(await git.isAncestor(newParent, child))) {
+    if (!git.isTrunkName(newParent) && !(await git.isAncestor(newParent, child))) {
       fail(
         `${pc.yellow(child)} isn't on ${pc.yellow(newParent)}'s current tip — restack the stack before joining:\n    ${pc.green("gh-stack restack")}`,
       );
@@ -439,7 +439,7 @@ async function buildPlan(
   }
 
   const trunkRef = (await git.refExists(`origin/${trunk}`)) ? `origin/${trunk}` : trunk;
-  const newParentRef = isTrunkName(newParent)
+  const newParentRef = git.isTrunkName(newParent)
     ? (await git.refExists(`origin/${newParent}`))
       ? `origin/${newParent}`
       : newParent
@@ -777,10 +777,6 @@ function usageError(message: string): never {
 function fail(message: string): never {
   p.cancel(message);
   process.exit(1);
-}
-
-function isTrunkName(name: string): boolean {
-  return name === "main" || name === "master";
 }
 
 function short(sha: string): string {

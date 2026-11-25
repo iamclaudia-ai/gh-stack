@@ -97,7 +97,7 @@ export default async function log(args: string[]): Promise<void> {
 async function suggestNextStep(meta: StackMetadata, branch: string): Promise<void> {
   const trunk = await git.trunkBranch();
 
-  if (branch === trunk || branch === "main" || branch === "master") {
+  if (git.isTrunkName(branch)) {
     p.log.warn(`You're on ${pc.blue(branch)} — not a stack branch`);
     console.log();
     console.log(`  Checkout a feature branch, then start a stack with:`);

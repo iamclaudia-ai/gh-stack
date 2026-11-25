@@ -300,7 +300,7 @@ export async function takeSnapshot(
   // branch that belongs to the parent stack. This is the boundary a later
   // re-root needs if the base branch is deleted by a squash-merge (issue #13).
   const base = stackBase(stack);
-  if (base !== "main" && base !== "master") {
+  if (!git.isTrunkName(base)) {
     try {
       snapshot.baseTip = await git.revParse(base);
       snapshot.baseBranch = base;

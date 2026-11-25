@@ -4,6 +4,7 @@
 
 ### 🐛 Fixes
 - **The "Don't merge this PR on GitHub" warning names the right base for sibling PRs.** In a stack with several branches on one parent (the dependency sweep builds these: one safe batch, a breaking PR per group on top of it), the warning took the PR listed just above as the base, so the second sibling told reviewers to merge the first sibling first, an unrelated PR. It now names the PR of the branch's recorded parent. (#124, #131)
+- **A repo whose default branch isn't `main` or `master` (`develop`, `trunk`) works throughout.** Since 0.19.32, `init` roots stacks on the default branch, but most other commands still decided "is this the trunk?" by the name `main` or `master`, so they took `develop` for a branch in a parent stack. `doctor` warned "base develop is already in develop" and advised `restack --onto main`, which would move the stack onto the wrong branch; `restack` rebased the stack's root onto `develop`, which is `sync`'s job; and `log` drew `develop` as "(base — in parent stack)". Every one of those checks now knows the repo's trunk, and `doctor` and `join` name it in their advice. (#135)
 
 ## 0.19.33
 

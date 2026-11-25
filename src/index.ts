@@ -69,14 +69,23 @@ if (!load) {
 
 // One run asks git the same questions many times; cache the answers for this
 // run, dropping each kind whenever a write can change it (#108).
-const { setGitCache, GitLockError, WorktreeBusyError, describeBlockedBranch, rebaseCommand } =
-  await import("./lib/git.ts");
+const {
+  setGitCache,
+  trunkBranch,
+  GitLockError,
+  WorktreeBusyError,
+  describeBlockedBranch,
+  rebaseCommand,
+} = await import("./lib/git.ts");
 setGitCache(true);
 
 // Every command needs a git repo except those in RUNS_OUTSIDE_REPO, and a
 // help page, which shows anywhere.
 if (!RUNS_OUTSIDE_REPO.has(command) && !parsed.showHelp) {
   await ensureGitRepo();
+  // Resolve the trunk once, so the synchronous trunk checks (git.isTrunkName)
+  // know a default branch other than main or master (#135).
+  await trunkBranch();
 }
 
 // A config problem (malformed TOML, a non-boolean env value) is reported as

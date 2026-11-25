@@ -409,7 +409,7 @@ Unknown keys print a warning. Malformed TOML, a non-boolean value or a bad env v
 
 ### Finding the Chain
 
-`init`, `add` and `submit` find a branch's chain by walking git ancestry: every local branch whose tip is an ancestor of it and not already on trunk (local `main` or `origin/main`). The trunk is the repo's default branch, from `origin/HEAD` (set by `git clone`; `git remote set-head origin -a` sets it otherwise), else `main` or `master`, whichever exists. Two branches at the same commit can't be parent and child, so only one goes in the chain and the others are named in a warning.
+`init`, `add` and `submit` find a branch's chain by walking git ancestry: every local branch whose tip is an ancestor of it and not already on trunk (the local or origin trunk). The trunk is the repo's default branch, from `origin/HEAD` (set by `git clone`; `git remote set-head origin -a` sets it otherwise), else `main` or `master`, whichever exists. Two branches at the same commit can't be parent and child, so only one goes in the chain and the others are named in a warning.
 
 ### Rebasing After a Parent Changes
 

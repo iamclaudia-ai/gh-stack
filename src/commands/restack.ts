@@ -480,7 +480,7 @@ export async function findStaleRefs(
   const seen = new Set<string>();
   const remoteHeads = remote ?? (await git.remoteHeads());
   for (const branch of branches) {
-    if (seen.has(branch) || branch === "main" || branch === "master") continue;
+    if (seen.has(branch) || git.isTrunkName(branch)) continue;
     seen.add(branch);
     if (!(await git.localBranchExists(branch))) continue;
     const local = await git.revParse(branch);
@@ -949,7 +949,7 @@ async function handleFreshRestack(
   // so changes propagate, so we don't skip it. A skipped root is still pushed:
   // if you committed on it, its ref is stale on origin (#12).
   const base = stackBase(stack);
-  const baseIsTrunk = base === "main" || base === "master";
+  const baseIsTrunk = git.isTrunkName(base);
   const baseBranches = baseIsTrunk ? chain.filter((b) => stack.branches[b]?.parent === base) : [];
   const toRebase = chain.filter((b) => !baseBranches.includes(b));
   if (baseBranches.length > 0) {
@@ -1460,7 +1460,7 @@ async function unpublishedParent(
   parent: string | undefined,
   ctx: ChainContext,
 ): Promise<string | null> {
-  if (!parent || parent === "main" || parent === "master" || parent === branch) return null;
+  if (!parent || git.isTrunkName(parent) || parent === branch) return null;
   if (ctx.unpublished.has(parent)) return parent;
   const remote = (await remoteTips(ctx)).get(parent);
   if (!remote || !(await git.localBranchExists(parent))) return null;
@@ -1486,7 +1486,7 @@ async function pushStep(
   branch: string,
   ctx: ChainContext,
 ): Promise<void> {
-  if (noPush || branch === "main" || branch === "master") return;
+  if (noPush || git.isTrunkName(branch)) return;
   const parent = meta.stacks[stackName]?.branches[branch]?.parent;
 
   const heldBy = await unpublishedParent(branch, parent, ctx);
@@ -1615,7 +1615,7 @@ async function pushBranchRef(
   branch: string,
   ctx: ChainContext,
 ): Promise<PushOutcome> {
-  if (branch === "main" || branch === "master") return "in-sync";
+  if (git.isTrunkName(branch)) return "in-sync";
   // --no-push: leave origin alone; the end-of-run summary lists what's ahead.
   if (noPush) return "no-push";
 
