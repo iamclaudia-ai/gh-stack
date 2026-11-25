@@ -256,9 +256,13 @@ describe("the ref snapshot", () => {
     await $`git tag -a atag -m annotated main`.quiet(); // the tag object, not the commit
     await $`git branch origin/side main`.quiet(); // a branch beats a remote-tracking ref
     await $`git branch deadbee side`.quiet(); // hex-looking, but a ref first
-    // A full object id is read as one, even where a branch has it as its name.
+    await $`git branch heads/side main`.quiet(); // refs/heads/side, not refs/heads/heads/side
+    // A full object id is read as one, even where a branch has it as its name,
+    // in either case (only the upper-case one: the filesystem may fold case).
     const main = (await $`git rev-parse main`.text()).trim();
+    const side = (await $`git rev-parse side`.text()).trim();
     await $`git update-ref refs/heads/${main} side`.quiet();
+    await $`git update-ref refs/heads/${side.toUpperCase()} main`.quiet();
     // An all-caps name is looked for in the git dir first.
     await $`git update-ref ORIG_HEAD main`.quiet();
     await $`git update-ref refs/heads/ORIG_HEAD side`.quiet();
@@ -290,6 +294,7 @@ describe("the ref snapshot", () => {
       "side~1",
       "side^{tree}",
       main,
+      side.toUpperCase(),
       side.slice(0, 9),
       "missing",
       "refs/heads/missing",

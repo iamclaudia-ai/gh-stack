@@ -666,14 +666,16 @@ const REF_RULES = [
  * when the snapshot can't say for sure, so git is asked. A name no ref
  * matches goes to git: revision syntax (`main~1`, `a..b`, `@{u}`) or an
  * abbreviated object id. Two kinds of name go to git even when a ref
- * matches: a full object id, which git reads as one before any ref, and an
- * all-caps name like ORIG_HEAD, which git looks for outside refs/ first.
+ * matches: a full object id (either case), which git reads as one before any
+ * ref, and an all-caps name like ORIG_HEAD, which git looks for in the git
+ * dir first. (On a case-insensitive filesystem, a branch named `head` or
+ * `orig_head` finds those files too; nobody names a branch that.)
  */
 async function refFromSnapshot(name: string): Promise<string | null> {
   if (!cacheOn) return null;
   // Revision syntax can't match a ref; this only spares the snapshot a read.
   if (!/^[A-Za-z0-9._][A-Za-z0-9._/-]*$/.test(name)) return null;
-  if (/^[0-9a-f]{40}$|^[0-9a-f]{64}$/.test(name) || /^[A-Z_]+$/.test(name)) return null;
+  if (/^[0-9a-f]{40}$|^[0-9a-f]{64}$/i.test(name) || /^[A-Z_]+$/.test(name)) return null;
   const refs = await refSnapshot();
   if (name.startsWith("refs/") && refs.has(name)) return refs.get(name)!;
   for (const rule of REF_RULES) {
