@@ -367,7 +367,7 @@ Prints the agent skill for gh-stack (Markdown, matching the installed version) t
 --version, -V  Show the version
 ```
 
-A command that needs to prompt without a TTY exits 1 with the prompt it would have shown; use `--yes` or `GH_STACK_YES=1` there.
+A command that needs to prompt without a TTY exits 1 with the prompt it would have shown; use `--yes` or `GH_STACK_YES=1` there. So does one run by a coding agent (`CLAUDECODE` or `ANIMA_SESSION_ID` set), even on a TTY: an agent's shell may be a tmux pane, where nobody answers.
 
 ## Environment Variables
 

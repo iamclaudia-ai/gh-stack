@@ -81,8 +81,11 @@ export GH_STACK_YES=1     # skip every confirmation, plain output
   pass `--push`/`--no-push`. `--yes` itself can't come from a config file:
   always pass it or `GH_STACK_YES=1`.
 - A prompt reached without a TTY on stdin **exits 1** (naming the prompt)
-  instead of hanging. If you see `refusing to prompt`, re-run with
-  `GH_STACK_YES=1`.
+  instead of hanging. So does one reached from an agent (`CLAUDECODE` or
+  `ANIMA_SESSION_ID` set), even on a TTY: an agent's shell may be a tmux pane,
+  where nobody answers. Don't count on a prompt: always pass `--yes` (or
+  `GH_STACK_YES=1`), plus `--no-push` when you mean to review before
+  publishing. If you see `refusing to prompt`, re-run that way.
 
 ## Core workflow
 
