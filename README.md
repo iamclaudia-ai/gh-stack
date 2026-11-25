@@ -146,7 +146,7 @@ The `--json` document:
 gh-stack log
 ```
 
-Shows the current stack as a tree with branch numbers, PRs and descriptions. This is the default command. On an untracked branch it says what to run next (`submit` or `init`).
+Shows the current stack as a tree with branch numbers, PRs and descriptions. Branches on the same parent hang under it side by side; the numbers count depth-first, as `checkout <N>` does. This is the default command. On an untracked branch it says what to run next (`submit` or `init`).
 
 ### Stack Navigation
 

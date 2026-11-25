@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### 🐛 Fixes
+- **`log` draws sibling branches as a tree under their parent.** Several branches on one parent (the dependency sweep's safe batch with one breaking branch per group on it) were drawn as one straight line, so the second sibling read as sitting on the first. Siblings now hang under their parent's ◯, each with its own subtree, the way the PR descriptions' tree does since 0.19.38. A straight stack renders exactly as before, and the `[N]` numbers are unchanged (depth-first, as `checkout <N>` counts them). `join`'s preview of the resulting stack uses the same tree. (#156)
+
 ### 🧪 Tests
 - **`join` is tested to record a stuck incoming PR's old base when no other PR moved.** The metadata write after the retargets ran when any PR moved or the incoming PR was stuck, but every test had a child PR moving, so dropping the second half passed them all. The new test makes the child's move fail too, then checks the later `submit` moves the PR with the "checks last ran against" note. (#163)
 
