@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.19.36
 
 ### 🐛 Fixes
 - **`restack --push` from mid-stack or the top publishes the branches below it too.** Restack only looked at the branch it ran from and the ones above, so after a commit on the bottom branch, or a `--no-push` restack or sync, the branches below were never pushed, and every branch above them was held back ("its parent isn't on origin at the commit it sits on"). `--resume` couldn't get past it either: it retried only the branches of its own run, and `gh-stack bottom && restack --push` just resumed that run again. Restack and `--resume` now push the branches below the start branch whose local commits origin lacks first, parents first. A branch below that's only behind origin isn't pushed backwards, one never pushed stays `submit`'s job, and one whose origin copy has commits you don't is named and skipped, not overwritten. (#126)
