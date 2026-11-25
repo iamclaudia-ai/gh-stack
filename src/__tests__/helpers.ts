@@ -586,6 +586,8 @@ case "$1 $2" in
     # GH_KILL_ON_EDIT: gh-stack dies here, after creating PRs, before its last write.
     [ -n "$GH_KILL_ON_EDIT" ] && kill -9 $PPID
     case "$*" in *--body-file*) [ -n "$GH_FAIL_BODY_EDIT" ] && exit 1 ;; esac
+    # GH_BODY_DIR/<n>.md keeps the last description \`gh pr edit <n> --body-file f\` sent.
+    case "$*" in *--body-file*) [ -n "$GH_BODY_DIR" ] && cp "$5" "$GH_BODY_DIR/$3.md" ;; esac
     ;;
 esac
 exit 0

@@ -468,6 +468,8 @@ async function runSubmit(args: string[], run: RunState, jsonMode: boolean): Prom
   let existing = 0;
   let skipped = 0;
   let metadataChanged = false;
+  /** Branches this run opens a PR for (or tries to): `-t`/`-b` are theirs (#122). */
+  const opening = new Set<string>();
   const outcomes = run.outcomes;
 
   // The branch's PR: recorded in metadata, else looked up on GitHub. A PR
@@ -611,6 +613,7 @@ async function runSubmit(args: string[], run: RunState, jsonMode: boolean): Prom
       }
     } else {
       // ── Create new PR ──
+      opening.add(branchName);
       const defaultTitle = titleFlag || branchToTitle(branchName);
       let title = defaultTitle;
 
@@ -702,6 +705,17 @@ async function runSubmit(args: string[], run: RunState, jsonMode: boolean): Prom
     }
   }
 
+  // `-t`/`-b` name the PRs this run opens. They update the current branch's
+  // existing PR only when the run opens none: run from the top with a new PR
+  // below, they'd otherwise overwrite the top PR's title and body (#122).
+  const retitleCurrent = opening.size === 0 || opening.has(branch);
+  const currentPr = stack.branches[branch]?.pr;
+  if ((titleFlag || bodyFlag) && !retitleCurrent && currentPr != null) {
+    p.log.info(
+      `-t/-b went to the new PR${opening.size === 1 ? "" : "s"} for ${[...opening].map((b) => pc.blue(b)).join(", ")}. PR #${currentPr} for ${pc.blue(branch)} keeps its title and description; to change them, run submit -t/-b on ${branch} when there's no new PR to open.`,
+    );
+  }
+
   p.print();
 
   if (dryRun) {
@@ -720,15 +734,16 @@ async function runSubmit(args: string[], run: RunState, jsonMode: boolean): Prom
   // render locally and only hit the network for PRs that actually changed
   // (see issue #16), so a no-op re-submit is free. ──
   // `-t`/`-b` (and `--body-file`) update the PR for the branch you're on, even
-  // if it already exists — title is renumbered, body is replaced with the viz
-  // block re-merged. This makes `submit` the one tool to update a PR without
-  // `gh pr edit` clobbering the `📚 Stacked on` block.
+  // if it already exists (unless this run opened another PR, above): title is
+  // renumbered, body is replaced with the viz block re-merged. This makes
+  // `submit` the one tool to update a PR without `gh pr edit` clobbering the
+  // `📚 Stacked on` block.
   p.log.info(pc.cyan("Updating PR titles & stack visualization..."));
   const titles = await reconcilePrTitles(stack, ordered, {
-    titleOverrides: titleFlag ? { [branch]: titleFlag } : undefined,
+    titleOverrides: titleFlag && retitleCurrent ? { [branch]: titleFlag } : undefined,
   });
   const viz = await refreshStackViz(meta, stack, ordered, {
-    bodyOverrides: bodyFlag ? { [branch]: bodyFlag } : undefined,
+    bodyOverrides: bodyFlag && retitleCurrent ? { [branch]: bodyFlag } : undefined,
   });
 
   run.edited = new Set([...titles.updatedBranches, ...viz.updatedBranches]);

@@ -21,6 +21,7 @@ import {
   findOpenPrForBranch,
   getPrInfo,
   getPrBody,
+  getPrTitle,
   updatePrBody,
   updatePrTitle,
   getRepoNwo,
@@ -263,7 +264,23 @@ export async function reconcilePrTitles(
     return { name, pr: bm.pr, prTitle: bm.prTitle, override: overrides[name], bm };
   });
 
-  const edits = planTitleEdits(items);
+  let edits = planTitleEdits(items);
+  // The cached title can be stale: one fixed on GitHub since (by hand, say,
+  // after a `-t` meant for another PR, #122) would be overwritten with it. So a
+  // title about to be renumbered is read live first; one that's only cached
+  // and isn't changing is never read, keeping a no-op submit free (#16).
+  const renumbered = edits.filter(({ item }) => item.override == null);
+  const live = await mapLimit(renumbered, 8, ({ item }) => getPrTitle(item.pr!));
+  let refreshed = false;
+  renumbered.forEach(({ item }, i) => {
+    const title = live[i];
+    if (title && title !== item.prTitle) {
+      item.prTitle = item.bm.prTitle = title;
+      refreshed = true;
+    }
+  });
+  if (refreshed) edits = planTitleEdits(items);
+
   const oks = await mapLimit(edits, 8, async ({ item, desired }) => {
     const ok = await updatePrTitle(item.pr!, desired);
     if (ok) item.bm.prTitle = desired;
@@ -272,7 +289,7 @@ export async function reconcilePrTitles(
 
   const updatedBranches = edits.filter((_, i) => oks[i]).map(({ item }) => item.name);
   const updated = updatedBranches.length;
-  return { updated, updatedBranches, dirty: dirtyBackfill || updated > 0 };
+  return { updated, updatedBranches, dirty: dirtyBackfill || refreshed || updated > 0 };
 }
 
 export interface VizResult {
