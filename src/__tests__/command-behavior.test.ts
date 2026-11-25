@@ -24,7 +24,9 @@ import {
   numberedTitle,
   stripSeqSuffix,
   planTitleEdits,
+  stackBranchInfos,
 } from "../commands/update-prs.ts";
+import { getOrderedBranches } from "../lib/metadata.ts";
 import { STACK_SYNC_TAG_GLOB } from "../lib/git.ts";
 import { planMerges, type BranchReview } from "../lib/advance.ts";
 import { getCurrentBranch, getSha } from "./helpers.ts";
@@ -278,12 +280,14 @@ describe("buildStackViz", () => {
       [
         {
           branch: "pr1",
+          parent: "main",
           prNumber: 123,
           prTitle: "Backend models",
           prUrl: "https://github.com/acme/widgets/pull/123",
         },
         {
           branch: "pr2",
+          parent: "pr1",
           prNumber: 124,
           prTitle: "Frontend UI",
           prUrl: "https://github.com/acme/widgets/pull/124",
@@ -300,8 +304,14 @@ describe("buildStackViz", () => {
   test("shows titles without a position prefix (position lives in the title) and omits review emoji", () => {
     const viz = buildStackViz(
       [
-        { branch: "pr1", prNumber: 123, prTitle: "Backend models (1/2)", prUrl: null },
-        { branch: "pr2", prNumber: 124, prTitle: "Frontend UI (2/2)", prUrl: null },
+        {
+          branch: "pr1",
+          parent: "main",
+          prNumber: 123,
+          prTitle: "Backend models (1/2)",
+          prUrl: null,
+        },
+        { branch: "pr2", parent: "pr1", prNumber: 124, prTitle: "Frontend UI (2/2)", prUrl: null },
       ],
       1,
     );
@@ -319,8 +329,8 @@ describe("buildStackViz", () => {
   test("defaults the base node to main", () => {
     const viz = buildStackViz(
       [
-        { branch: "pr1", prNumber: 1, prTitle: "One", prUrl: null },
-        { branch: "pr2", prNumber: 2, prTitle: "Two", prUrl: null },
+        { branch: "pr1", parent: "main", prNumber: 1, prTitle: "One", prUrl: null },
+        { branch: "pr2", parent: "pr1", prNumber: 2, prTitle: "Two", prUrl: null },
       ],
       0,
     );
@@ -330,8 +340,8 @@ describe("buildStackViz", () => {
   test("renders a split stack's base branch (with PR link) instead of main", () => {
     const viz = buildStackViz(
       [
-        { branch: "pr12", prNumber: 12, prTitle: "New work", prUrl: null },
-        { branch: "pr13", prNumber: 13, prTitle: "More work", prUrl: null },
+        { branch: "pr12", parent: "pr11", prNumber: 12, prTitle: "New work", prUrl: null },
+        { branch: "pr13", parent: "pr12", prNumber: 13, prTitle: "More work", prUrl: null },
       ],
       0,
       { label: "pr11", prNumber: 11, prUrl: "https://github.com/acme/widgets/pull/11" },
@@ -342,11 +352,15 @@ describe("buildStackViz", () => {
   });
 
   test("single-branch split stack links the base PR", () => {
-    const viz = buildStackViz([{ branch: "pr12", prNumber: 12, prTitle: "Solo", prUrl: null }], 0, {
-      label: "pr11",
-      prNumber: 11,
-      prUrl: null,
-    });
+    const viz = buildStackViz(
+      [{ branch: "pr12", parent: "pr11", prNumber: 12, prTitle: "Solo", prUrl: null }],
+      0,
+      {
+        label: "pr11",
+        prNumber: 11,
+        prUrl: null,
+      },
+    );
     expect(viz).toContain("#11 pr11");
     expect(viz).not.toContain("**main**");
   });
@@ -355,9 +369,9 @@ describe("buildStackViz", () => {
   // below and closes it for good. Its block says so; the bottom PR's doesn't.
   describe("upper-PR merge warning", () => {
     const three = [
-      { branch: "pr1", prNumber: 1, prTitle: "One", prUrl: null },
-      { branch: "pr2", prNumber: 2, prTitle: "Two", prUrl: null },
-      { branch: "pr3", prNumber: 3, prTitle: "Three", prUrl: null },
+      { branch: "pr1", parent: "main", prNumber: 1, prTitle: "One", prUrl: null },
+      { branch: "pr2", parent: "pr1", prNumber: 2, prTitle: "Two", prUrl: null },
+      { branch: "pr3", parent: "pr2", prNumber: 3, prTitle: "Three", prUrl: null },
     ];
 
     test("the bottom PR of a stack on trunk gets no warning", () => {
@@ -385,9 +399,10 @@ describe("buildStackViz", () => {
 
     test("the bottom of a split stack warns about its base PR in the other stack", () => {
       const base = { label: "pr11", prNumber: 11, prUrl: null, trunk: "main" };
-      const multi = buildStackViz(three.slice(0, 2), 0, base);
+      const split = [{ ...three[0]!, parent: "pr11" }, three[1]!];
+      const multi = buildStackViz(split, 0, base);
       expect(multi).toContain("Its base is #11's branch, not `main`");
-      const solo = buildStackViz([three[0]!], 0, base);
+      const solo = buildStackViz([split[0]!], 0, base);
       expect(solo).toContain("> [!WARNING]");
       expect(solo).toContain("Merge #11 first");
     });
@@ -396,8 +411,61 @@ describe("buildStackViz", () => {
       const body = mergeViz("Describes PR 2.", buildStackViz(three, 1));
       expect(body).toContain("Don't merge");
       // Once PR 1 lands, PR 2 is the bottom: its refreshed block has no warning.
-      const landed = buildStackViz(three.slice(1), 0);
+      const landed = buildStackViz([{ ...three[1]!, parent: "main" }, three[2]!], 0);
+      expect(landed).not.toContain("Don't merge");
       expect(mergeViz(body, landed)).toBe(`Describes PR 2.\n\n${landed}`);
+    });
+
+    // #124, #131: siblings (B and C both on A, as the dependency sweep builds)
+    // sit next to each other in the list, but C's base is A, not B.
+    describe("siblings", () => {
+      const siblings = [
+        { branch: "a", parent: "main", prNumber: 1, prTitle: "Batch", prUrl: null },
+        { branch: "b", parent: "a", prNumber: 2, prTitle: "Breaking one", prUrl: null },
+        { branch: "b2", parent: "b", prNumber: 4, prTitle: "On top of b", prUrl: null },
+        { branch: "c", parent: "a", prNumber: 3, prTitle: "Breaking two", prUrl: null },
+      ];
+
+      test("each sibling names the shared parent's PR, not the entry listed above it", () => {
+        expect(buildStackViz(siblings, 1)).toContain("Its base is #1's branch");
+        expect(buildStackViz(siblings, 3)).toContain(
+          "Its base is #1's branch, not `main`: merging it here squashes it into that branch and closes it for good, with nothing reaching `main`. Merge #1 first,",
+        );
+        expect(buildStackViz(siblings, 3)).not.toContain("#4's branch");
+        // A branch on a sibling still names its own parent.
+        expect(buildStackViz(siblings, 2)).toContain("Its base is #2's branch");
+      });
+
+      test("sibling roots of a split stack both name the base PR in the other stack", () => {
+        const base = { label: "batch", prNumber: 11, prUrl: null, trunk: "main" };
+        const roots = [
+          { branch: "x", parent: "batch", prNumber: 12, prTitle: "X", prUrl: null },
+          { branch: "y", parent: "batch", prNumber: 13, prTitle: "Y", prUrl: null },
+        ];
+        expect(buildStackViz(roots, 0, base)).toContain("Merge #11 first");
+        expect(buildStackViz(roots, 1, base)).toContain("Merge #11 first");
+      });
+
+      test("the parent comes from stack metadata", () => {
+        const stack = {
+          description: "",
+          last_branch: null,
+          base: "main",
+          branches: {
+            "deps/batch": { parent: "main", pr: 485 },
+            "deps/expo": { parent: "deps/batch", pr: 486 },
+            "deps/oxfmt": { parent: "deps/batch", pr: 487 },
+          },
+        };
+        const infos = stackBranchInfos(stack, getOrderedBranches(stack), null);
+        expect(infos.map((i) => i.branch)).toEqual(["deps/batch", "deps/expo", "deps/oxfmt"]);
+        const oxfmt = buildStackViz(infos, 2);
+        expect(oxfmt).toContain("Its base is #485's branch");
+        expect(oxfmt).toContain("Merge #485 first");
+        expect(oxfmt).not.toContain("#486's branch");
+        expect(oxfmt).not.toContain("Merge #486");
+        expect(buildStackViz(infos, 0)).not.toContain("Don't merge");
+      });
     });
 
     test("resolveBaseRef follows split stacks down to the trunk", async () => {
@@ -433,18 +501,21 @@ describe("buildStackViz", () => {
   // that hash-skip safe and correct.
   test("is deterministic for identical inputs (enables hash-skip)", () => {
     const branches = [
-      { branch: "pr1", prNumber: 1, prTitle: "One", prUrl: null },
-      { branch: "pr2", prNumber: 2, prTitle: "Two", prUrl: null },
+      { branch: "pr1", parent: "main", prNumber: 1, prTitle: "One", prUrl: null },
+      { branch: "pr2", parent: "pr1", prNumber: 2, prTitle: "Two", prUrl: null },
     ];
     expect(buildStackViz(branches, 0)).toBe(buildStackViz(branches, 0));
   });
 
   test("adding a branch changes existing PRs' rendered block (forces re-PATCH)", () => {
     const before = [
-      { branch: "pr1", prNumber: 1, prTitle: "One", prUrl: null },
-      { branch: "pr2", prNumber: 2, prTitle: "Two", prUrl: null },
+      { branch: "pr1", parent: "main", prNumber: 1, prTitle: "One", prUrl: null },
+      { branch: "pr2", parent: "pr1", prNumber: 2, prTitle: "Two", prUrl: null },
     ];
-    const after = [...before, { branch: "pr3", prNumber: 3, prTitle: "Three", prUrl: null }];
+    const after = [
+      ...before,
+      { branch: "pr3", parent: "pr2", prNumber: 3, prTitle: "Three", prUrl: null },
+    ];
 
     // PR1's block (targetIndex 0) must differ once a new tip joins the stack,
     // so its cached hash misses and it gets the updated tree.

@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### 🐛 Fixes
+- **The "Don't merge this PR on GitHub" warning names the right base for sibling PRs.** In a stack with several branches on one parent (the dependency sweep builds these: one safe batch, a breaking PR per group on top of it), the warning took the PR listed just above as the base, so the second sibling told reviewers to merge the first sibling first, an unrelated PR. It now names the PR of the branch's recorded parent. (#124, #131)
+
 ## 0.19.33
 
 ### 🐛 Fixes
