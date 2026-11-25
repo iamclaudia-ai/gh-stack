@@ -564,6 +564,177 @@ describe("join: child cut from an earlier tip of the incoming branch (#46 review
   });
 });
 
+// #148: as a new bottom on main, the incoming PR moves to main right before
+// its push, not after it: the push's `pull_request` event carries the PR's
+// base at that moment, and a trunk's required checks only count a run made
+// against the trunk. Children still move after, onto a pushed incoming.
+describe("join: the incoming PR moves before its push (#148)", () => {
+  beforeEach(async () => {
+    // The join stub, plus: `pr view 20 --json baseRefName` answers from
+    // 20-base.json (fails without it), `pr edit N` fails while edit-N.fails
+    // counts down.
+    await Bun.write(
+      `${binDir}/gh`,
+      `#!/bin/sh
+echo "$*" >> "${ghLog}"
+case "$*" in
+  "pr list --head incoming "*) echo 20 ;;
+  "pr view 20 --json baseRefName") cat "${binDir}/20-base.json" || exit 1 ;;
+esac
+if [ "$1 $2" = "pr edit" ]; then
+  fails="${binDir}/edit-$3.fails"
+  if [ -f "$fails" ] && [ "$(cat "$fails")" -gt 0 ]; then
+    echo $(( $(cat "$fails") - 1 )) > "$fails"
+    echo "GraphQL: Something went wrong (updatePullRequest)" >&2
+    exit 1
+  fi
+fi
+exit 0
+`,
+    );
+  });
+
+  /** behindMainScenario, PR #20 on `base`, and origin logging each push into the gh log. */
+  async function scenario(base: string): Promise<void> {
+    await behindMainScenario();
+    await Bun.write(`${binDir}/20-base.json`, JSON.stringify({ baseRefName: base }));
+    const hook = `${remoteDir}/hooks/pre-receive`;
+    await Bun.write(
+      hook,
+      `#!/bin/sh
+status=0
+while read old new ref; do
+  b=\${ref#refs/heads/}
+  if [ -f '${binDir}'/reject-"$b" ]; then echo "rejected $b" >&2; status=1; continue; fi
+  echo "push $b" >> '${ghLog}'
+done
+exit $status
+`,
+    );
+    await fs.chmod(hook, 0o755);
+  }
+
+  test("PR #20 → main, then incoming is pushed, then the children move", async () => {
+    await scenario("release");
+
+    const res = await runCli(["join", "incoming"]);
+
+    expect(res.exitCode).toBe(0);
+    const calls = await ghCalls();
+    const moved = calls.indexOf("pr edit 20 --base main");
+    const pushed = calls.indexOf("push incoming");
+    expect(moved).toBeGreaterThan(-1);
+    expect(pushed).toBeGreaterThan(moved);
+    expect(calls.indexOf("pr edit 11 --base incoming")).toBeGreaterThan(pushed);
+    expect(calls.filter((c) => c.startsWith("pr edit 20"))).toEqual(["pr edit 20 --base main"]);
+    expect(res.out).not.toContain("checks last ran against");
+    const stack = (await readMetadata(tmpDir)).stacks["test-stack"]!;
+    expect(stack.branches.incoming?.prBase).toBe("main");
+  });
+
+  test("a rejected push puts PR #20 back, and the stack is unchanged", async () => {
+    await scenario("release");
+    await Bun.write(`${binDir}/reject-incoming`, "");
+
+    const res = await runCli(["join", "incoming"]);
+
+    expect(res.exitCode).toBe(1);
+    expect(res.out).toContain("isn't on origin at its synced tip");
+    expect(res.out).toContain("PR #20 back on release until incoming is pushed");
+    const calls = await ghCalls();
+    expect(calls.filter((c) => c.startsWith("pr edit"))).toEqual([
+      "pr edit 20 --base main",
+      "pr edit 20 --base release",
+    ]);
+    expect(calls).not.toContain("push incoming");
+    // The sync moved incoming locally and a snapshot was taken; the stack
+    // metadata itself is untouched.
+    expect((await readMetadata(tmpDir)).stacks["test-stack"]!.branches.incoming).toBeUndefined();
+  });
+
+  test("a PR already on main isn't edited", async () => {
+    await scenario("main");
+
+    const res = await runCli(["join", "incoming"]);
+
+    expect(res.exitCode).toBe(0);
+    const calls = await ghCalls();
+    expect(calls.some((c) => c.startsWith("pr edit 20"))).toBe(false);
+    expect(calls).toContain("push incoming");
+    expect((await readMetadata(tmpDir)).stacks["test-stack"]!.branches.incoming?.prBase).toBe(
+      "main",
+    );
+  });
+
+  test("a move that fails before the push is retried after it, with the note", async () => {
+    await scenario("release");
+    // setPrBase tries three times: all of them before the push fail.
+    await Bun.write(`${binDir}/edit-20.fails`, "3");
+
+    const res = await runCli(["join", "incoming"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(res.out).toContain("Could not retarget PR #20 before the push");
+    const calls = await ghCalls();
+    const pushed = calls.indexOf("push incoming");
+    expect(calls.lastIndexOf("pr edit 20 --base main")).toBeGreaterThan(pushed);
+    expect(res.out).toContain(
+      "PR #20's checks last ran against release, not main: a check main requires waits until incoming is pushed again",
+    );
+  });
+
+  /** A join whose every move of PR #20 fails: three tries before the push, three after. */
+  async function joinWithPr20Stuck(): Promise<void> {
+    await scenario("release");
+    await Bun.write(`${binDir}/edit-20.fails`, "6");
+    const res = await runCli(["join", "incoming"]);
+    expect(res.exitCode).toBe(0);
+    expect(res.out).toContain("Could not retarget PR #20");
+    // Where PR #20 still points is recorded, though applyJoin dropped its old base.
+    const entry = (await readMetadata(tmpDir)).stacks["test-stack"]!.branches.incoming!;
+    expect(entry.prBase).toBe("release");
+    await fs.rm(`${binDir}/edit-20.fails`);
+    await fs.rm(ghLog);
+  }
+
+  const lateNote =
+    "PR #20's checks last ran against release, not main: a check main requires waits until incoming is pushed again";
+
+  test("both moves fail: the submit that retries says the checks need a new push", async () => {
+    await joinWithPr20Stuck();
+
+    const res = await runCli(["submit", "--no-edit"]);
+
+    expect(await ghCalls()).toContain("pr edit 20 --base main");
+    expect(res.out).toContain(lateNote);
+  });
+
+  test("both moves fail: a restack from incoming moves PR #20, with the note", async () => {
+    await joinWithPr20Stuck();
+    await checkout(tmpDir, "incoming");
+
+    const res = await runCli(["restack"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(await ghCalls()).toContain("pr edit 20 --base main");
+    expect(res.out).toContain(lateNote);
+  });
+
+  test("a late move onto a branch that isn't the trunk gets no note", async () => {
+    await scenario("release");
+    await Bun.write(`${binDir}/edit-20.fails`, "3");
+
+    const res = await runCli(["join", "incoming", "--above", "pr1"]);
+
+    expect(res.exitCode).toBe(0);
+    const calls = await ghCalls();
+    expect(calls.lastIndexOf("pr edit 20 --base pr1")).toBeGreaterThan(
+      calls.indexOf("push incoming"),
+    );
+    expect(res.out).not.toContain("checks last ran against");
+  });
+});
+
 describe("join: rename collision (#46 review)", () => {
   test("keeps the old name when the new bottom's name belongs to an archived stack", async () => {
     await behindMainScenario("pr1");

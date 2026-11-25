@@ -39,7 +39,12 @@ import {
   ensureWorktreesReady,
 } from "../lib/safety.ts";
 import { takeSnapshot, resolveRestackBoundary } from "../lib/snapshot.ts";
-import { findOpenPrForBranch, setPrBase } from "../lib/github.ts";
+import {
+  checksBeforeRetargetNote,
+  findOpenPrForBranch,
+  getPrBase,
+  setPrBase,
+} from "../lib/github.ts";
 import { confirmAction, renderStackTree } from "../lib/ui.ts";
 import {
   ensureNoPendingRun,
@@ -255,11 +260,21 @@ export default async function join(args: string[]): Promise<void> {
 
   // ── 3. Publish the incoming branch — and confirm it landed before anything
   //       is built on it. Still before the metadata write: a declined or
-  //       rejected push leaves the stack unchanged.
-  await publishBranch(joined, plan.incoming, { noPush });
+  //       rejected push leaves the stack unchanged. Its PR moves to the new
+  //       parent right before the push, not after it (#148): the push's
+  //       `pull_request` event carries the PR's base at that moment, and a
+  //       trunk's required checks only count a run made against the trunk.
+  const incomingMove = await incomingRetarget(plan, noPush);
+  await publishBranch(joined, plan.incoming, {
+    noPush,
+    beforePush: incomingMove ? () => moveIncomingPr(plan, incomingMove) : undefined,
+  });
   if (!noPush) {
     const remote = (await git.remoteHeads()).get(plan.incoming);
     if (remote !== (await git.revParse(plan.incoming))) {
+      // With the old head still on origin, the PR on its new base would show
+      // the commits the sync dropped (#29), so it goes back.
+      if (incomingMove?.moved) await putIncomingPrBack(plan, incomingMove);
       p.log.error(
         `${pc.yellow(plan.incoming)} isn't on origin at its synced tip (push declined or rejected), so nothing was built on it.`,
       );
@@ -276,7 +291,7 @@ export default async function join(args: string[]): Promise<void> {
   const chain = buildRebaseChain(joined.stacks[stackName]!, plan.incoming);
 
   // ── 4. Retarget PR bases onto it ──
-  const retargeted = noPush ? [] : await retargetPrs(plan);
+  const retargeted = noPush ? [] : await retargetPrs(plan, incomingMove);
   if (noPush && expectedRetargets(plan) > 0) {
     p.log.info(
       `PR bases left alone (--no-push) — ${pc.green("gh-stack submit")} publishes and retargets them together.`,
@@ -659,6 +674,52 @@ interface Retarget {
   base: string;
 }
 
+/** The incoming PR's base, read before the push so it can move first (#148). */
+interface IncomingMove {
+  pr: number;
+  /** Its base on GitHub before the join; null when it couldn't be read. */
+  before: string | null;
+  /** Moved to the new parent before the push. */
+  moved: boolean;
+}
+
+async function incomingRetarget(plan: JoinPlan, noPush: boolean): Promise<IncomingMove | null> {
+  if (noPush || plan.incomingPr == null) return null;
+  return { pr: plan.incomingPr, before: await getPrBase(plan.incomingPr), moved: false };
+}
+
+/**
+ * Runs once the push is confirmed. A base that couldn't be read isn't moved:
+ * if the push then failed, there'd be no base to put back. It moves after the
+ * push instead, as before.
+ */
+async function moveIncomingPr(plan: JoinPlan, move: IncomingMove): Promise<void> {
+  if (move.before == null || move.before === plan.newParent) return;
+  const moved = await setPrBase(move.pr, plan.newParent);
+  if (moved.ok) {
+    move.moved = true;
+    p.log.success(`PR #${move.pr} (${plan.incoming}) base → ${pc.green(plan.newParent)}`);
+  } else {
+    p.log.warn(
+      `Could not retarget PR #${move.pr} before the push (${moved.error}); retrying after it`,
+    );
+  }
+}
+
+async function putIncomingPrBack(plan: JoinPlan, move: IncomingMove): Promise<void> {
+  const back = await setPrBase(move.pr, move.before!);
+  if (back.ok) {
+    move.moved = false;
+    p.log.info(
+      `PR #${move.pr} back on ${pc.yellow(move.before!)} until ${plan.incoming} is pushed`,
+    );
+  } else {
+    p.log.warn(
+      `Could not move PR #${move.pr} back to ${move.before} (${back.error}): until ${plan.incoming} is pushed, it shows commits the sync dropped.`,
+    );
+  }
+}
+
 function plannedRetargets(plan: JoinPlan): Retarget[] {
   const out: Retarget[] = [];
   if (plan.incomingPr != null) {
@@ -675,32 +736,52 @@ function expectedRetargets(plan: JoinPlan): number {
 }
 
 /**
- * Point the incoming PR at its new parent and each child PR at the incoming
- * branch. The caller has confirmed the synced incoming tip is on origin:
- * against a stale remote copy a child PR's diff would show the very commits
- * the sync dropped.
+ * Point the incoming PR at its new parent (unless it moved before the push)
+ * and each child PR at the incoming branch. The caller has confirmed the
+ * synced incoming tip is on origin: against a stale remote copy a child PR's
+ * diff would show the very commits the sync dropped.
  */
-async function retargetPrs(plan: JoinPlan): Promise<Retarget[]> {
+async function retargetPrs(plan: JoinPlan, incoming: IncomingMove | null): Promise<Retarget[]> {
   const targets = plannedRetargets(plan);
   const done: Retarget[] = [];
+  // Where a PR that couldn't move really points, for a base applyJoin dropped.
+  const stuck: Retarget[] = [];
   for (const t of targets) {
+    const isIncoming = t.branch === plan.incoming && incoming != null;
+    if (isIncoming && (incoming.moved || incoming.before === t.base)) {
+      done.push(t);
+      continue;
+    }
     const moved = await setPrBase(t.pr, t.base);
     if (moved.ok) {
       p.log.success(`PR #${t.pr} (${t.branch}) base → ${pc.green(t.base)}`);
       done.push(t);
+      // It moved after the push, or with nothing pushed (#148).
+      const note = isIncoming
+        ? checksBeforeRetargetNote(t.pr, t.branch, incoming.before, t.base)
+        : null;
+      if (note) p.log.warn(note);
     } else {
       p.log.warn(
         `Could not retarget PR #${t.pr} (${moved.error}) — run ${pc.green("gh-stack submit")} to retry`,
       );
+      // applyJoin dropped the incoming PR's recorded base. Put back the one it
+      // still has, so submit's retry and restack's retargetIfStale move it and
+      // say its checks need a new push (#148), as advancePastMerged records
+      // the merged branch after a failed move.
+      if (isIncoming && incoming.before != null) {
+        stuck.push({ ...t, base: incoming.before });
+      }
     }
   }
 
-  // Record the bases we set, so submit skips the redundant edit.
-  if (done.length > 0) {
+  // Record the bases we set (so submit skips the redundant edit), and where a
+  // PR that couldn't move still points.
+  if (done.length > 0 || stuck.length > 0) {
     const meta = await freshMeta();
     const stack = meta.stacks[plan.finalName];
     if (stack) {
-      for (const t of done) {
+      for (const t of [...done, ...stuck]) {
         const entry = stack.branches[t.branch];
         if (entry) entry.prBase = t.base;
       }

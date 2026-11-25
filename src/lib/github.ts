@@ -1,6 +1,7 @@
 // GitHub CLI (gh) helpers
 import { $ } from "bun";
 import type { PrInfo, PrStatus } from "../types.ts";
+import { isTrunkName } from "./git.ts";
 import { retryWait } from "./retry-delay.ts";
 
 let cachedNwo: string | null | undefined; // undefined = not yet looked up
@@ -324,6 +325,34 @@ export async function getPrTitle(prNumber: number): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/** The branch a PR targets on GitHub now, or null when it can't be read. */
+export async function getPrBase(prNumber: number): Promise<string | null> {
+  try {
+    const data = await ghPrViewJson(prNumber, "baseRefName");
+    return typeof data?.baseRefName === "string" ? data.baseRefName : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The note for a PR that just moved from `from` onto the trunk `to` with no
+ * push after the move, or null when there's nothing to say. Its last push's
+ * `pull_request` event carried the old base, and a trunk ruleset only counts a
+ * check run made against the trunk, so a required check stays "Expected"
+ * until the branch is pushed again. Moving before the push avoids it (#133);
+ * this covers a move that couldn't (#148).
+ */
+export function checksBeforeRetargetNote(
+  pr: number,
+  branch: string,
+  from: string | null | undefined,
+  to: string,
+): string | null {
+  if (!from || from === to || !isTrunkName(to)) return null;
+  return `PR #${pr}'s checks last ran against ${from}, not ${to}: a check ${to} requires waits until ${branch} is pushed again (a new commit, then gh-stack submit --existing).`;
 }
 
 /**

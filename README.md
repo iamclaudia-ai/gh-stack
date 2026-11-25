@@ -247,7 +247,7 @@ Cuts a stack in two at `<branch>`: it and every branch above it become a new sta
 gh-stack join <branch> [--above <branch>] [--no-push | --push] [--dry-run] [-v|--verbose]
 ```
 
-Splices an existing branch, usually one with its own PR, into the current stack: as the new bottom, or between `--above <branch>` and its children. The incoming branch is first rebased onto its new parent (only its own commits), then the branches above it are restacked onto it and pushed, and the PR bases are retargeted on GitHub. Its open PR is adopted. A stack named after its old bottom is renamed after the new one.
+Splices an existing branch, usually one with its own PR, into the current stack: as the new bottom, or between `--above <branch>` and its children. The incoming branch is first rebased onto its new parent (only its own commits), then the branches above it are restacked onto it and pushed, and the PR bases are retargeted on GitHub. The incoming PR moves to its new base right before its push, so a trunk's required checks count that push's CI run; if the push fails, the PR goes back. Its open PR is adopted. A stack named after its old bottom is renamed after the new one.
 
 The branch must exist locally and, unless `--no-push`, on origin. A branch alone in a one-branch stack is absorbed; one in a larger stack is refused. Refuses on a dirty tree. Takes a snapshot first.
 

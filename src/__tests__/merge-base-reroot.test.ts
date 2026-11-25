@@ -597,6 +597,87 @@ describe("the re-rooted branch's PR is retargeted before its push (#133)", () =>
   });
 });
 
+// #148: when the retarget before the push keeps failing, the push goes out
+// anyway, and its checks run against the old base. A retarget that lands
+// later, with nothing left to push, can't fix that: the run says so.
+describe("a retarget that lands after the push says the checks need a new push (#148)", () => {
+  const note =
+    "PR #2's checks last ran against pr1, not main: a check main requires waits until pr2 is pushed again";
+
+  /** merge --base with every retarget of PR #2 failing: pr2 is pushed, PR #2 stays on pr1. */
+  async function pushedWhileOnPr1(): Promise<void> {
+    await githubSquashesPr1();
+    await logPushes();
+    await Bun.write(`${binDir}/edit-2.fails`, "99");
+    await checkout(tmpDir, "pr1");
+    const res = await runCli(["merge", "--base"]);
+    expect(res.exitCode).toBe(0);
+    expect(await ghCalls()).toContain("push pr2");
+    expect(JSON.parse(await Bun.file(`${binDir}/2.json`).text()).baseRefName).toBe("pr1");
+    await fs.rm(`${binDir}/edit-2.fails`);
+    await fs.rm(`${binDir}/gh.log`);
+    await checkout(tmpDir, "pr2");
+  }
+
+  test("restack: nothing to push, PR #2 → main, and the note", async () => {
+    await pushedWhileOnPr1();
+
+    const res = await runCli(["restack"]);
+
+    expect(res.exitCode).toBe(0);
+    const calls = await ghCalls();
+    expect(calls).toContain("pr edit 2 --base main");
+    expect(calls).not.toContain("push pr2");
+    expect(res.out).toContain(note);
+  });
+
+  test("submit: nothing to push, PR #2 → main, and the note", async () => {
+    await pushedWhileOnPr1();
+
+    const res = await runCli(["submit", "--no-edit"]);
+
+    expect(res.exitCode).toBe(0);
+    const calls = await ghCalls();
+    expect(calls).toContain("pr edit 2 --base main");
+    expect(calls).not.toContain("push pr2");
+    expect(res.out).toContain(note);
+  });
+
+  test("restack: a move that fails before the push and lands after it gets the note", async () => {
+    await githubSquashesPr1();
+    await checkout(tmpDir, "pr1");
+    expect((await runCli(["merge", "--base", "--no-push"])).exitCode).toBe(0);
+    await logPushes();
+    // setPrBase tries three times: all of them before the push fail.
+    await Bun.write(`${binDir}/edit-2.fails`, "3");
+    await fs.rm(`${binDir}/gh.log`);
+    await checkout(tmpDir, "pr2");
+
+    const res = await runCli(["restack", "--push"]);
+
+    expect(res.exitCode).toBe(0);
+    const calls = await ghCalls();
+    const pushed = calls.indexOf("push pr2");
+    expect(pushed).toBeGreaterThan(-1);
+    expect(calls.lastIndexOf("pr edit 2 --base main")).toBeGreaterThan(pushed);
+    expect(JSON.parse(await Bun.file(`${binDir}/2.json`).text()).baseRefName).toBe("main");
+    expect(res.out).toContain(note);
+  });
+
+  test("a retarget made before the push gets no note", async () => {
+    await githubSquashesPr1();
+    await logPushes();
+    await checkout(tmpDir, "pr1");
+
+    const res = await runCli(["merge", "--base"]);
+    const after = await runCli(["restack"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(after.exitCode).toBe(0);
+    expect(res.out + after.out).not.toContain("checks last ran against");
+  });
+});
+
 // #78: the branch that becomes the new bottom is checked out in another
 // worktree. The re-root and the restack of the tail run there, and merge no
 // longer checks it out here.
