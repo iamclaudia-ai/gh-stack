@@ -128,6 +128,7 @@ async function squashMergeWithRetry(
     const proc = Bun.spawn(["gh", ...ghArgs], { stdout: "pipe", stderr: "pipe" });
     const stderr = await new Response(proc.stderr).text();
     const exitCode = await proc.exited;
+    git.noteRemoteChange(); // trunk moved on origin (or may have, if gh failed late)
     if (exitCode === 0) return { ok: true };
 
     // Raced with another merge / a prior re-run? If it's already merged, done.
@@ -475,6 +476,7 @@ OPTIONS
       if (!dryRun) {
         const subject = await squashSubjectArgs(basePr);
         const auto = await $`gh pr merge ${basePr} --squash --auto ${subject}`.nothrow().quiet();
+        git.noteRemoteChange();
         if (auto.exitCode === 0) {
           p.log.success(`Auto-merge enabled for PR #${basePr}`);
         } else {
@@ -801,6 +803,7 @@ OPTIONS
     const proc = Bun.spawn(["gh", ...ghArgs], { stdout: "pipe", stderr: "pipe" });
     const stderr = await new Response(proc.stderr).text();
     const exitCode = await proc.exited;
+    git.noteRemoteChange(); // checks that already passed merge it right away
     return { ok: exitCode === 0, stderr: stderr.trim() };
   };
 

@@ -102,9 +102,16 @@ type CacheKind =
   /** `git worktree list`, and which branch each worktree is using. */
   | "worktrees"
   /** What a ref or revision resolves to. */
-  | "refs";
+  | "refs"
+  /**
+   * Origin's branch tips, read with `git ls-remote`: a network round trip.
+   * Origin changes when gh-stack pushes, and when it changes GitHub through
+   * `gh` (noteRemoteChange). A fetch asks for origin's latest, so it clears
+   * this too.
+   */
+  | "remote";
 
-const MUTABLE: CacheKind[] = ["config", "branches", "head", "worktrees", "refs"];
+const MUTABLE: CacheKind[] = ["config", "branches", "head", "worktrees", "refs", "remote"];
 
 let cacheOn = false;
 const caches = new Map<CacheKind, Map<string, Promise<unknown>>>();
@@ -146,8 +153,9 @@ function changedBy(args: string[]): CacheKind[] {
       return [];
     case "config":
       return ["config"];
-    case "fetch":
+    case "fetch": // asks for origin's latest
     case "push": // remote-tracking refs (and upstream config, not a ghstack- key)
+      return ["refs", "remote"];
     case "tag":
     case "reset":
     case "merge":
@@ -158,8 +166,9 @@ function changedBy(args: string[]): CacheKind[] {
     case "update-ref": // can create a branch
       return ["refs", "branches"];
     case "rebase": // checks the branch out first, and detaches HEAD while it runs
-    case "pull": // may rebase (pull.rebase), and stop detached on a conflict
       return ["refs", "head", "worktrees"];
+    case "pull": // fetches, then may rebase (pull.rebase) and stop detached on a conflict
+      return ["refs", "head", "worktrees", "remote"];
     case "checkout": // `-b`, and `checkout <name>` creating it from origin/<name>
     case "switch":
       return ["refs", "branches", "head", "worktrees"];
@@ -171,6 +180,15 @@ function changedBy(args: string[]): CacheKind[] {
 /** Report a git command that may have changed the repo, so cached answers it affects are dropped. */
 export function noteGitWrite(args: string[]): void {
   for (const kind of changedBy(args)) caches.delete(kind);
+}
+
+/**
+ * Report a change gh-stack made to origin through GitHub rather than git (a
+ * branch deleted through the API, a PR merged), so the next read of origin's
+ * branches asks it again.
+ */
+export function noteRemoteChange(): void {
+  caches.delete("remote");
 }
 
 /**
@@ -845,14 +863,24 @@ export async function fetchObjectsOnly(refs: string[]): Promise<boolean> {
  * `rev-parse origin/<branch>`, which reads the local remote-tracking ref that a
  * force-push can leave stale (a fresh fetch would correct it). Use this when a
  * correct answer about the remote's real state matters (e.g. the post-restack
- * sync verification — #23). Returns a map of branch name → sha.
+ * sync verification — #23). Returns a map of branch name → sha (empty when
+ * origin couldn't be asked).
+ *
+ * The answer is kept for the run until gh-stack changes origin or fetches
+ * (the "remote" cache kind): restack asked twice with no push in between,
+ * and each ask is a network round trip, ~0.75 s on a big repo (#151). A
+ * failed ask isn't kept.
  */
 export async function remoteHeads(): Promise<Map<string, string>> {
   const heads = new Map<string, string>();
-  const { exitCode, stdout } = await $`git ls-remote --heads origin`.nothrow().quiet();
-  if (exitCode !== 0) return heads;
+  const stdout = await cached("remote", "heads", async () => {
+    const r = await $`git ls-remote --heads origin`.nothrow().quiet();
+    if (r.exitCode !== 0) throw new Error(`git ls-remote failed (exit ${r.exitCode})`);
+    return r.stdout.toString();
+  }).catch(() => null);
+  if (stdout === null) return heads;
   const prefix = "refs/heads/";
-  for (const line of stdout.toString().split("\n")) {
+  for (const line of stdout.split("\n")) {
     const tab = line.indexOf("\t");
     if (tab === -1) continue;
     const sha = line.slice(0, tab).trim();
