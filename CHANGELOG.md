@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### 🧪 Tests
+- **`join` is tested to record a stuck incoming PR's old base when no other PR moved.** The metadata write after the retargets ran when any PR moved or the incoming PR was stuck, but every test had a child PR moving, so dropping the second half passed them all. The new test makes the child's move fail too, then checks the later `submit` moves the PR with the "checks last ran against" note. (#163)
+
 ## 0.19.40
 
 ### 🐛 Fixes
