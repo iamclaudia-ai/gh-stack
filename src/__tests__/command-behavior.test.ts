@@ -553,6 +553,18 @@ describe("buildStackViz", () => {
       );
     });
 
+    test("the last sibling's own chain hangs under it with no guide beside it", () => {
+      const tree = [
+        info("a", "main", 1, "A"),
+        info("b", "a", 2, "B"),
+        info("c", "a", 3, "C"),
+        info("c2", "c", 4, "C2"),
+      ];
+      expect(rows(buildStackViz(tree, 3))).toBe(
+        ["⚫ main", "┃", "┗━ #1 A", "   ┣━ #2 B", "   ┗━ #3 C", "      ┗━ #4 C2 👈"].join("\n"),
+      );
+    });
+
     test("a straight run stays a column up to the branch that forks", () => {
       const forked = [
         info("a", "main", 1, "A"),
