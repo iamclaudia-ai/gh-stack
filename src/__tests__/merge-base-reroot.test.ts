@@ -184,6 +184,16 @@ async function mainAddsConflictingPr2File(): Promise<void> {
   await git(otherDir, "push", "-q", "origin", "main");
 }
 
+/** Someone else's PR lands on "GitHub"'s main: it moves on, touching nothing of ours. */
+async function mainMovesOn(): Promise<void> {
+  await git(otherDir, "checkout", "-q", "main");
+  await git(otherDir, "pull", "-q", "--ff-only", "origin", "main");
+  await Bun.write(`${otherDir}/elsewhere.txt`, "someone else's change\n");
+  await git(otherDir, "add", "elsewhere.txt");
+  await git(otherDir, "commit", "-q", "-m", "main: someone else's PR");
+  await git(otherDir, "push", "-q", "origin", "main");
+}
+
 describe("merge --base re-roots onto the trunk after the squash (#51)", () => {
   test("the next branch lands on main with the merged PR's squash, and the tail follows", async () => {
     await githubSquashesPr1();
@@ -410,6 +420,65 @@ describe("sync's re-root stopped on a conflict is finished by re-running sync (#
     const meta = await readMetadata(tmpDir);
     expect(meta.stacks["test-stack"]!.branches["pr1"]).toBeUndefined();
     expect(meta.stacks["test-stack"]!.branches["pr2"]!.parent).toBe("main");
+  });
+});
+
+// #132: on a busy repo, main moves on between the run that stopped and the
+// re-run. The re-run fetches it again, so the re-rooted branch no longer
+// contains origin/main, and it used to be re-rooted a second time from the
+// merge-base with the merged branch: the old fork point on main, replaying
+// every main commit since. Holding the merged PR's squash commit is the proof.
+describe("a re-run after main moved on finishes the re-root without redoing it (#132)", () => {
+  async function stopOnConflictThenResolve(command: string[]): Promise<void> {
+    const first = await runCli(command);
+    expect(first.exitCode).toBe(2);
+    expect(first.out).toContain("Rebase conflict re-rooting pr2 onto main");
+    await Bun.write(`${tmpDir}/pr2.txt`, "resolved\n");
+    await git(tmpDir, "add", "pr2.txt");
+    await $`git -C ${tmpDir} -c core.editor=true rebase --continue`.quiet();
+  }
+
+  test("merge --base: pr2 is pushed as resolved, not re-rooted again", async () => {
+    await mainAddsConflictingPr2File();
+    await githubSquashesPr1();
+    await checkout(tmpDir, "pr1");
+    await stopOnConflictThenResolve(["merge", "--base"]);
+    const resolved = await git(tmpDir, "rev-parse", "pr2");
+    await mainMovesOn();
+
+    const second = await runCli(["merge", "--base"]);
+
+    expect(second.exitCode).toBe(0);
+    expect(second.out).toContain("pr2 is already on main");
+    expect(second.out).not.toContain("Re-rooting pr2");
+    expect(await git(tmpDir, "rev-parse", "pr2")).toBe(resolved);
+    expect(await remoteSha("pr2")).toBe(resolved);
+    expect(await git(tmpDir, "rev-list", "--count", "pr2..pr3")).toBe("1");
+    expect(await ghCalls()).toContain("pr edit 2 --base main");
+    const meta = await readMetadata(tmpDir);
+    expect(meta.stacks["test-stack"]!.branches["pr1"]).toBeUndefined();
+    expect(meta.stacks["test-stack"]!.branches["pr2"]!.parent).toBe("main");
+  });
+
+  test("sync: pr2 is not re-rooted again, and the usual sync rebases it onto the new main", async () => {
+    await mainAddsConflictingPr2File();
+    await githubSquashesPr1();
+    await $`sh ${binDir}/merge-1.sh`.quiet();
+    await checkout(tmpDir, "pr2");
+    await stopOnConflictThenResolve(["sync"]);
+    await mainMovesOn();
+
+    const second = await runCli(["sync"]);
+
+    expect(second.exitCode).toBe(0);
+    expect(second.out).toContain("pr2 is already on main");
+    expect(second.out).not.toContain("Re-rooting pr2");
+    // Then sync's own rebase moves it onto the new main: one commit of its own.
+    const main = await remoteSha("main");
+    expect(await contains(remoteDir, main, "refs/heads/pr2")).toBe(true);
+    expect(await git(tmpDir, "rev-list", "--count", `${main}..pr2`)).toBe("1");
+    expect(await git(tmpDir, "rev-list", "--count", "pr2..pr3")).toBe("1");
+    expect(await ghCalls()).toContain("pr edit 2 --base main");
   });
 });
 

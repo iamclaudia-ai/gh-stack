@@ -22,6 +22,7 @@ import { loadRunState } from "../lib/run-log.ts";
 import {
   planMerges,
   advancePastMerged,
+  landingCommit,
   strandedMerges,
   survivorsOf,
   type BranchReview,
@@ -370,6 +371,7 @@ async function findMergedBottoms(meta: StackMetadata, stackName: string): Promis
       pr,
       baseRefName: state?.baseRefName ?? null,
       mergedAt: state?.mergedAt ?? null,
+      mergeCommit: state?.mergeCommit ?? null,
     });
   }
   return { plan: planMerges(reviews, { approveAndMerge: false }), run };
@@ -579,6 +581,7 @@ async function advanceMergedBottoms(
       branch,
       pr: stack.branches[branch]?.pr ?? null,
       expect: verified.get(branch),
+      landed: landingCommit(run, stack.branches[branch]!.parent, trunk),
     })),
     targetRef,
     recordedBase: trunk,
@@ -608,6 +611,11 @@ async function advanceMergedBottoms(
     }
     process.exit(2);
   }
+  // As in dropCollapsed: a survivor just pushed has a new tip on origin, and
+  // the sync's own rebase onto the trunk (which moves it when the trunk moved
+  // on since its re-root, #132) leases on what was pushed, not on what the
+  // guard saw.
+  if (!noPush) for (const s of survivors) verified.delete(s);
 
   // Whole stack drained? Archive the original topology and land on the trunk.
   const surviving = meta.stacks[stackName];

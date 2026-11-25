@@ -113,6 +113,31 @@ export interface MergedRunEntry {
   /** The branch its PR merged into. */
   baseRefName: string | null;
   mergedAt: string | null;
+  /** Its PR's merge commit (the squash), on `baseRefName`; null if GitHub didn't say. */
+  mergeCommit: string | null;
+}
+
+/**
+ * The commit that brought `branch`'s changes to `trunk`: its own PR's merge
+ * commit when that PR merged into the trunk, else the landing commit of the
+ * run branch it merged into (a collapse). Null when the chain leaves the run
+ * or GitHub didn't name a merge commit. A survivor that contains this commit
+ * has already been re-rooted onto the trunk (#132).
+ */
+export function landingCommit(
+  run: Pick<MergedRunEntry, "branch" | "baseRefName" | "mergeCommit">[],
+  branch: string,
+  trunk: string,
+): string | null {
+  const byBranch = new Map(run.map((entry) => [entry.branch, entry]));
+  const seen = new Set<string>();
+  let entry = byBranch.get(branch);
+  while (entry && !seen.has(entry.branch)) {
+    seen.add(entry.branch);
+    if (entry.baseRefName === trunk) return entry.mergeCommit;
+    entry = entry.baseRefName ? byBranch.get(entry.baseRefName) : undefined;
+  }
+  return null;
 }
 
 /** A merged PR whose changes never reached the trunk. */
@@ -201,6 +226,12 @@ export interface Survivor {
    * leases on exactly that sha (see git.forcePushWithLease).
    */
   expect?: string;
+  /**
+   * The commit on the target that carries its merged parent's changes (see
+   * landingCommit). A survivor that contains it was already re-rooted, by an
+   * earlier run stopped on a conflict, even when the target moved on since.
+   */
+  landed?: string | null;
 }
 
 /**
@@ -272,8 +303,14 @@ export async function advancePastMerged(opts: {
     // resolved, or the branch was re-rooted by hand (#51). Its fork point is
     // behind it now, so skip the rebase and finish the rest (push, PR base,
     // metadata). Before a re-root the child can't contain the target, which
-    // holds the merged PR's new squash commit.
-    if (await git.isAncestor(targetRef, child)) {
+    // holds the merged PR's new squash commit. Nor can it contain that squash
+    // commit itself, which is the test that survives a target that moved on
+    // between the runs: the re-run fetches the trunk again, and on a busy repo
+    // the re-rooted child is then behind it (#132).
+    if (
+      (await git.isAncestor(targetRef, child)) ||
+      (survivor.landed != null && (await git.isAncestor(survivor.landed, child)))
+    ) {
       p.log.info(
         `${pc.yellow(child)} is already on ${pc.green(recordedBase)} — finishing its re-root`,
       );
