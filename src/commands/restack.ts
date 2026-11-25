@@ -214,7 +214,8 @@ OPTIONS
               restack from the current branch
   --overwrite-remote
               Rewrite branches even though origin has commits they lack
-              (see below). Those commits are dropped from origin
+              (see below). Those commits are dropped from origin. Covers the
+              run's own branches, not the ones below it
   --dry-run   Show what would happen without executing
   --verbose   Show diagnostic info (where each rebase base came from)
 

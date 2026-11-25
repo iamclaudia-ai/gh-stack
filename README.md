@@ -185,7 +185,7 @@ Rebases the current branch and every branch above it onto their parents, then fo
 - `--push`: push even when the env var or config says not to
 - `--resume`: continue an interrupted run (after a conflict, a failed push or a kill). It keeps that run's push decision unless you pass `--push` or `--no-push`.
 - `--fresh`: discard an interrupted run and start over
-- `--overwrite-remote`: rewrite branches even though origin has commits they lack (see below), dropping those commits
+- `--overwrite-remote`: rewrite branches even though origin has commits they lack (see below), dropping those commits. It covers the run's own branches; a branch below the start branch with such commits is skipped either way
 - `--onto <ref>`: re-root the stack onto a new base, replaying only the stack's own commits. Use it to move a split stack onto `main` once the stack it was split from has merged.
 - `--dry-run`: show what would happen
 - `-v, --verbose`: show where each rebase base came from
