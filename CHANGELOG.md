@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.19.43
 
 ### 🐛 Fixes
 - **`top` offers only the tips above the current branch.** It chose among every tip in the stack, so on `main → a → { b → c, d }` it asked "which branch?" from `b` (only `c` is above it) and even from the tip `c`, and under `--yes` (since 0.19.42) stopped there with exit 1. It now goes to the one tip above, says "Already at the top" on a tip, and asks only when several tips sit above the current branch: "Several tips sit above a: c, d". (#170)
