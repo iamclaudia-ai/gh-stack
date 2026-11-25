@@ -340,20 +340,25 @@ describe("restack from a split stack pushes the parent stacks' branches below it
     expect(await remoteSha("pr2")).toBe(before);
   });
 
-  test("a parent stack's branch with commits only on origin is named and left alone", async () => {
+  test("a parent stack's branch with commits only on origin is named and left alone; the run goes on", async () => {
     await splitStacks();
-    await createBranch(tmpDir, "teammate", "pr2");
-    await makeCommit(tmpDir, "theirs.txt", "theirs\n", "their commit on pr2");
-    await $`git -C ${tmpDir} push -q origin teammate:refs/heads/pr2`.quiet();
-    const theirs = await remoteSha("pr2");
-    await checkout(tmpDir, "pr2");
-    await makeCommit(tmpDir, "ours.txt", "ours\n", "our commit on pr2");
+    // Origin's pr1 has a teammate's commit, local pr1 one of ours. pr2 still
+    // matches origin (on the old pr1), and pr3 gains a commit.
+    await createBranch(tmpDir, "teammate", "pr1");
+    await makeCommit(tmpDir, "theirs.txt", "theirs\n", "their commit on pr1");
+    await $`git -C ${tmpDir} push -q origin teammate:refs/heads/pr1`.quiet();
+    const theirs = await remoteSha("pr1");
+    await checkout(tmpDir, "pr1");
+    await makeCommit(tmpDir, "ours.txt", "ours\n", "our commit on pr1");
     await checkout(tmpDir, "pr3");
+    await makeCommit(tmpDir, "pr3-more.txt", "more\n", "more on pr3");
 
     const res = await runCli(["restack", "--push"]);
 
-    expect(res.out).toContain("Not pushing pr2 (origin has commits it lacks), below pr3");
-    expect(await remoteSha("pr2")).toBe(theirs);
+    expect(res.exitCode).toBe(0);
+    expect(res.out).toContain("Not pushing pr1 (origin has commits it lacks), below pr3");
+    expect(await remoteSha("pr1")).toBe(theirs);
+    expect(await remoteSha("pr3")).toBe(await sha("pr3"));
   });
 
   test("a parent stack's branch sitting on a skipped one is held, checked against its own stack", async () => {
