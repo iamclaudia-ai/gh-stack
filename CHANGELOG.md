@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### 🧪 Tests
+- **The suite runs about a quarter faster and starts a third fewer git processes.** Its cost was git process count, not disk: ~31,000 per run at ~10 ms each, 62% from test fixtures. A fresh test repo took six git commands, and the 3-branch stacks most tests start from took another eleven. They're now built once, with the same commands, and copied per test (shared by every worker and run, and rebuilt when `helpers.ts` changes); a stack is copied only into a repo nothing has touched yet. Branches are created off their parent in one checkout, and `pushAllBranches` pushes in one call. ~21,600 git processes per run; at the same load the suite took 130-136 s instead of 166-185 s. (#138)
+
 ## 0.19.35
 
 ### 🐛 Fixes
