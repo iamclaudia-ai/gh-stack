@@ -4,6 +4,7 @@
 
 ### ⚡ Performance
 - **`restack`, `sync`, `merge` and `join` ask origin for its branches once per run, until they change it.** Each `git ls-remote --heads origin` is a network round trip (0.75 s on a repo with 3,800 remote branches), and a restack asked twice with no push in between: once to check origin for commits the restack would drop, once for the tips it pushes against. The answer is now kept for the run, and dropped when gh-stack pushes, fetches or pulls, merges a PR, or deletes a branch through the GitHub API, so the check after a push still reads origin afresh (#23). Across the test suite, `ls-remote` calls went from 444 to 293 (restack 199 to 100). (#151)
+- **Branch lookups come from one `git for-each-ref` per run, until a write moves a ref.** A run asked git about one branch at a time (`rev-parse <branch>`, `show-ref --verify`, `rev-parse --verify`), and again after every write; now one snapshot of every ref answers them, resolving each name in git's own order (a tag before a branch, a branch before a remote-tracking ref). Names it can't answer for sure go to git as before: revision syntax, abbreviated or full object ids, and all-caps names like `ORIG_HEAD`. The git dir, its absolute path and the worktree root also come from one `rev-parse` instead of three. Across the test suite's CLI runs, git processes went from 30.8 per run to 23.7 (14,965 to 11,498 in all). (#151)
 
 ## 0.19.44
 
