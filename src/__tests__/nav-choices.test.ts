@@ -164,7 +164,7 @@ describe("up and top at a fork name the branches instead of saying to pass --yes
 
     expect(res.exitCode).toBe(1);
     expect(res.out).toContain(
-      "The stack has several tips: pr3, side. Go to one with gh-stack checkout <branch>.",
+      "Several tips sit above pr1: pr3, side. Go to one with gh-stack checkout <branch>.",
     );
     expect(res.out).not.toContain("refusing to prompt");
     expect(await currentBranch()).toBe("pr1");
@@ -177,5 +177,51 @@ describe("up and top at a fork name the branches instead of saying to pass --yes
 
     expect(res.exitCode).toBe(0);
     expect(await currentBranch()).toBe("side");
+  });
+});
+
+describe("top offers only the tips above the current branch (#170)", () => {
+  test("one tip above goes there, though the stack has another on a different fork", async () => {
+    await forkedStack();
+    await checkout(tmpDir, "pr2");
+
+    const res = await runCli(["top", "--yes"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(res.out).toContain("On pr3");
+    expect(await currentBranch()).toBe("pr3");
+  });
+
+  test("on a tip, it stays there", async () => {
+    await forkedStack();
+
+    for (const tip of ["pr3", "side"]) {
+      await checkout(tmpDir, tip);
+      const res = await runCli(["top", "--yes"]);
+
+      expect(res.exitCode).toBe(0);
+      expect(res.out).toContain(`Already at the top: ${tip}`);
+      expect(await currentBranch()).toBe(tip);
+    }
+  });
+
+  test("several tips above are named, without the one on another fork", async () => {
+    // main → pr1 → { pr2 → { pr3, side }, other }
+    await forkedStack("pr2");
+    await createBranch(tmpDir, "other", "pr1");
+    await makeCommit(tmpDir, "other.txt", "other\n", "other: add file");
+    const meta = await readMetadata(tmpDir);
+    meta.stacks["test-stack"]!.branches.other = { parent: "pr1", pr: 5, description: "Other" };
+    await writeMetadata(tmpDir, meta);
+    await checkout(tmpDir, "pr2");
+
+    const res = await runCli(["top", "--yes"]);
+
+    expect(res.exitCode).toBe(1);
+    expect(res.out).toContain(
+      "Several tips sit above pr2: pr3, side. Go to one with gh-stack checkout <branch>.",
+    );
+    expect(res.out).not.toMatch(/\bother\b/);
+    expect(await currentBranch()).toBe("pr2");
   });
 });
