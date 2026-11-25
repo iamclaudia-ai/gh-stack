@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PrInfo, PrStatus } from "../types.ts";
-import { isTrunkName } from "./git.ts";
+import { isTrunkName, noteRemoteChange } from "./git.ts";
 import { retryWait } from "./retry-delay.ts";
 
 let cachedNwo: string | null | undefined; // undefined = not yet looked up
@@ -318,6 +318,7 @@ export async function deleteBranchOnGitHub(branch: string): Promise<GhResult> {
   const ref = branch.split("/").map(encodeURIComponent).join("/");
   const endpoint = `repos/{owner}/{repo}/git/refs/heads/${ref}`;
   const r = await $`gh api --method DELETE ${endpoint}`.nothrow().quiet();
+  noteRemoteChange(); // even a failed call may have reached GitHub
   if (r.exitCode === 0) return { ok: true };
   const error = ghError(r);
   if (/Reference does not exist/i.test(error)) return { ok: true };

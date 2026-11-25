@@ -24,6 +24,7 @@ afterEach(async () => {
   process.chdir(originalCwd);
   await $`git -C ${tmpDir} worktree remove --force ${tmpDir}-wt`.quiet().nothrow();
   await cleanup(`${tmpDir}-wt`);
+  await cleanup(`${tmpDir}-origin`);
   await cleanup(tmpDir);
 });
 
@@ -34,9 +35,17 @@ interface Answers {
   head: string;
   config: string | undefined;
   worktrees: number;
+  /** Origin's branches and their tips, from ls-remote. */
+  remote: string;
 }
 type Kind = keyof Answers;
-const KINDS: Kind[] = ["refs", "branches", "head", "config", "worktrees"];
+const KINDS: Kind[] = ["refs", "branches", "head", "config", "worktrees", "remote"];
+
+const describeHeads = (heads: Map<string, string>) =>
+  [...heads]
+    .map(([branch, sha]) => `${branch}=${sha}`)
+    .sort()
+    .join(" ");
 
 async function ask(): Promise<Answers> {
   return {
@@ -45,6 +54,7 @@ async function ask(): Promise<Answers> {
     head: await git.currentBranch(),
     config: (await getBranchMembership("main")).stack,
     worktrees: (await git.listWorktrees()).length,
+    remote: describeHeads(await git.remoteHeads()),
   };
 }
 
@@ -59,6 +69,17 @@ async function truthNow(): Promise<Answers> {
     head: (await out($`git rev-parse --abbrev-ref HEAD`)).trim(),
     config: config || undefined,
     worktrees: (await out($`git worktree list --porcelain`)).match(/^worktree /gm)?.length ?? 0,
+    remote: describeHeads(
+      new Map(
+        (await out($`git ls-remote --heads origin`))
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => {
+            const [sha, ref] = line.split("\t");
+            return [ref!.replace("refs/heads/", ""), sha!];
+          }),
+      ),
+    ),
   };
 }
 
@@ -67,6 +88,7 @@ async function truthNow(): Promise<Answers> {
  * back. Returns the cached (now stale) answers and the true ones.
  */
 async function staleEverything(): Promise<{ stale: Answers; truth: Answers }> {
+  await addOrigin();
   await $`git branch side`.quiet();
   git.setGitCache(true);
   const stale = await ask();
@@ -76,11 +98,19 @@ async function staleEverything(): Promise<{ stale: Answers; truth: Answers }> {
   await $`git branch made`.quiet();
   await $`git config branch.main.ghstack-stack s`.quiet();
   await $`git worktree add -q --detach ${tmpDir}-wt`.quiet();
+  await $`git push -q origin side`.quiet();
   const truth = await truthNow();
   for (const kind of KINDS) expect(truth[kind]).not.toEqual(stale[kind]);
   // Nothing has invalidated anything yet.
   expect(await ask()).toEqual(stale);
   return { stale, truth };
+}
+
+/** A bare origin holding main. */
+async function addOrigin(): Promise<void> {
+  await $`git init -q --bare ${tmpDir}-origin`.quiet();
+  await $`git remote add origin ${tmpDir}-origin`.quiet();
+  await $`git push -q origin main`.quiet();
 }
 
 describe("git answer cache", () => {
@@ -100,6 +130,17 @@ describe("git answer cache", () => {
   // Each write drops the kinds it can change and keeps the rest.
   const writes: { name: string; args: string[]; changes: Kind[] }[] = [
     { name: "a config write", args: ["config", "gh-stack.probe", "1"], changes: ["config"] },
+    {
+      name: "a push",
+      args: ["push", "-q", "origin", "HEAD:refs/heads/pushed"],
+      changes: ["refs", "remote"],
+    },
+    { name: "a fetch", args: ["fetch", "-q", "origin"], changes: ["refs", "remote"] },
+    {
+      name: "a pull",
+      args: ["pull", "-q", "--ff-only", "origin", "main"],
+      changes: ["refs", "head", "worktrees", "remote"],
+    },
     { name: "a tag", args: ["tag", "probe-tag"], changes: ["refs"] },
     { name: "a commit", args: ["commit", "--allow-empty", "-q", "-m", "e"], changes: ["refs"] },
     { name: "an index refresh", args: ["update-index", "--refresh"], changes: [] },
@@ -137,12 +178,26 @@ describe("git answer cache", () => {
     expect(await git.currentBranch()).toBe(truth.head);
   });
 
-  test("a push reported with noteGitWrite drops refs", async () => {
+  test("a push reported with noteGitWrite drops refs and origin's branches", async () => {
     const { stale, truth } = await staleEverything();
     git.noteGitWrite(["push"]);
     const now = await ask();
     expect(now.refs).toBe(truth.refs);
+    expect(now.remote).toBe(truth.remote);
     expect(now.head).toBe(stale.head);
+  });
+
+  test("noteRemoteChange drops origin's branches and nothing else", async () => {
+    const { stale, truth } = await staleEverything();
+    git.noteRemoteChange();
+    expect(await ask()).toEqual({ ...stale, remote: truth.remote });
+  });
+
+  test("an ls-remote that fails isn't cached", async () => {
+    git.setGitCache(true);
+    expect(await git.remoteHeads()).toEqual(new Map()); // no origin yet
+    await addOrigin();
+    expect([...(await git.remoteHeads()).keys()]).toEqual(["main"]);
   });
 
   test("a failed lookup isn't cached", async () => {
@@ -158,6 +213,10 @@ describe("git answer cache", () => {
     const wts = await git.listWorktrees();
     wts[0]!.branch = "changed";
     expect((await git.listWorktrees())[0]!.branch).toBe("main");
+    await addOrigin();
+    const heads = await git.remoteHeads();
+    heads.set("main", "changed");
+    expect((await git.remoteHeads()).get("main")).toBe(await git.revParse("main"));
     const all = await allBranchMemberships();
     all.get("main")!.stack = "changed";
     expect((await getBranchMembership("main")).stack).toBe("s");
@@ -183,6 +242,32 @@ describe("raw git writes", () => {
         });
       }
     }
+    expect(offenders).toEqual([]);
+  });
+
+  // gh-stack also changes origin through GitHub: a PR merge moves trunk, an
+  // API delete removes a branch. The cached ls-remote answer has to go too.
+  test("changes made through GitHub are reported with noteRemoteChange", async () => {
+    const GH_WRITE = /\$`gh pr merge |\["pr", "merge"|--method DELETE/;
+    const root = path.resolve(import.meta.dir, "../..");
+    const offenders: string[] = [];
+    let writes = 0;
+    for (const dir of ["commands", "lib"]) {
+      for (const file of await readdir(path.join(root, dir))) {
+        if (!file.endsWith(".ts")) continue;
+        const lines = (await Bun.file(path.join(root, dir, file)).text()).split("\n");
+        lines.forEach((line, i) => {
+          if (!GH_WRITE.test(line)) return;
+          writes++;
+          // Reported within the next few lines, once gh has returned.
+          const after = lines.slice(i + 1, i + 9).join("\n");
+          if (!after.includes("noteRemoteChange()")) {
+            offenders.push(`${dir}/${file}:${i + 1}: ${line.trim()}`);
+          }
+        });
+      }
+    }
+    expect(writes).toBeGreaterThanOrEqual(4); // the pattern still finds them
     expect(offenders).toEqual([]);
   });
 });
