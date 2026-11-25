@@ -682,6 +682,57 @@ exit $status
       "PR #20's checks last ran against release, not main: a check main requires waits until incoming is pushed again",
     );
   });
+
+  /** A join whose every move of PR #20 fails: three tries before the push, three after. */
+  async function joinWithPr20Stuck(): Promise<void> {
+    await scenario("release");
+    await Bun.write(`${binDir}/edit-20.fails`, "6");
+    const res = await runCli(["join", "incoming"]);
+    expect(res.exitCode).toBe(0);
+    expect(res.out).toContain("Could not retarget PR #20");
+    // Where PR #20 still points is recorded, though applyJoin dropped its old base.
+    const entry = (await readMetadata(tmpDir)).stacks["test-stack"]!.branches.incoming!;
+    expect(entry.prBase).toBe("release");
+    await fs.rm(`${binDir}/edit-20.fails`);
+    await fs.rm(ghLog);
+  }
+
+  const lateNote =
+    "PR #20's checks last ran against release, not main: a check main requires waits until incoming is pushed again";
+
+  test("both moves fail: the submit that retries says the checks need a new push", async () => {
+    await joinWithPr20Stuck();
+
+    const res = await runCli(["submit", "--no-edit"]);
+
+    expect(await ghCalls()).toContain("pr edit 20 --base main");
+    expect(res.out).toContain(lateNote);
+  });
+
+  test("both moves fail: a restack from incoming moves PR #20, with the note", async () => {
+    await joinWithPr20Stuck();
+    await checkout(tmpDir, "incoming");
+
+    const res = await runCli(["restack"]);
+
+    expect(res.exitCode).toBe(0);
+    expect(await ghCalls()).toContain("pr edit 20 --base main");
+    expect(res.out).toContain(lateNote);
+  });
+
+  test("a late move onto a branch that isn't the trunk gets no note", async () => {
+    await scenario("release");
+    await Bun.write(`${binDir}/edit-20.fails`, "3");
+
+    const res = await runCli(["join", "incoming", "--above", "pr1"]);
+
+    expect(res.exitCode).toBe(0);
+    const calls = await ghCalls();
+    expect(calls.lastIndexOf("pr edit 20 --base pr1")).toBeGreaterThan(
+      calls.indexOf("push incoming"),
+    );
+    expect(res.out).not.toContain("checks last ran against");
+  });
 });
 
 describe("join: rename collision (#46 review)", () => {

@@ -744,6 +744,8 @@ function expectedRetargets(plan: JoinPlan): number {
 async function retargetPrs(plan: JoinPlan, incoming: IncomingMove | null): Promise<Retarget[]> {
   const targets = plannedRetargets(plan);
   const done: Retarget[] = [];
+  // Where a PR that couldn't move really points, for a base applyJoin dropped.
+  const stuck: Retarget[] = [];
   for (const t of targets) {
     const isIncoming = t.branch === plan.incoming && incoming != null;
     if (isIncoming && (incoming.moved || incoming.before === t.base)) {
@@ -763,15 +765,23 @@ async function retargetPrs(plan: JoinPlan, incoming: IncomingMove | null): Promi
       p.log.warn(
         `Could not retarget PR #${t.pr} (${moved.error}) — run ${pc.green("gh-stack submit")} to retry`,
       );
+      // applyJoin dropped the incoming PR's recorded base. Put back the one it
+      // still has, so submit's retry and restack's retargetIfStale move it and
+      // say its checks need a new push (#148), as advancePastMerged records
+      // the merged branch after a failed move.
+      if (isIncoming && incoming.before != null) {
+        stuck.push({ ...t, base: incoming.before });
+      }
     }
   }
 
-  // Record the bases we set, so submit skips the redundant edit.
-  if (done.length > 0) {
+  // Record the bases we set (so submit skips the redundant edit), and where a
+  // PR that couldn't move still points.
+  if (done.length > 0 || stuck.length > 0) {
     const meta = await freshMeta();
     const stack = meta.stacks[plan.finalName];
     if (stack) {
-      for (const t of done) {
+      for (const t of [...done, ...stuck]) {
         const entry = stack.branches[t.branch];
         if (entry) entry.prBase = t.base;
       }
