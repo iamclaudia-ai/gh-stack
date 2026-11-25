@@ -720,6 +720,30 @@ exit $status
     expect(res.out).toContain(lateNote);
   });
 
+  // #163: with child PR #11 stuck as well, no PR moved at all, and the
+  // metadata write still has to happen for PR #20's old base alone.
+  test("only PR #20 stuck (its child's move fails too): its base is still recorded", async () => {
+    await scenario("release");
+    await Bun.write(`${binDir}/edit-20.fails`, "6");
+    await Bun.write(`${binDir}/edit-11.fails`, "3");
+
+    const join = await runCli(["join", "incoming"]);
+
+    expect(join.exitCode).toBe(0);
+    expect(join.out).toContain("Could not retarget PR #20");
+    expect(join.out).toContain("Could not retarget PR #11");
+    const entry = (await readMetadata(tmpDir)).stacks["test-stack"]!.branches.incoming!;
+    expect(entry.prBase).toBe("release");
+    await fs.rm(`${binDir}/edit-20.fails`);
+    await fs.rm(`${binDir}/edit-11.fails`);
+    await fs.rm(ghLog);
+
+    const res = await runCli(["submit", "--no-edit"]);
+
+    expect(await ghCalls()).toContain("pr edit 20 --base main");
+    expect(res.out).toContain(lateNote);
+  });
+
   test("a late move onto a branch that isn't the trunk gets no note", async () => {
     await scenario("release");
     await Bun.write(`${binDir}/edit-20.fails`, "3");
