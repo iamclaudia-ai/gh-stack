@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.19.37
 
 ### 🐛 Fixes
 - **A prompt reached from an agent's terminal exits at once instead of hanging.** Since 0.18.0 a prompt with no TTY on stdin exits 1, naming the prompt (#33). But agents may run commands in a tmux pane, where stdin is a TTY and nobody types, so a `restack` without `--yes` sat on "Rebase … onto …?" until the agent's tool timeout killed it ten minutes later. A prompt now also refuses when `CLAUDECODE` (Claude Code) or `ANIMA_SESSION_ID` (any Anima agent session, Codex included) is set, and says which. Prompts in a person's terminal are unchanged. (#123)
