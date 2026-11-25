@@ -305,7 +305,7 @@ gh-stack checkout      # interactive picker (alias: co)
 ```
 
 `--yes` can't choose a branch: at a fork, `up` and `top` stop (exit 1) and name
-the branches, and the `checkout`/`delete` pickers stop too. Go straight to one
+the branches, and the `checkout`, `delete` and `split` pickers stop too. Go straight to one
 with `gh-stack checkout <branch>`.
 
 ### 4. Sync & restack

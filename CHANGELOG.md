@@ -4,16 +4,14 @@
 
 ### 🐛 Fixes
 - **`delete` says when a child PR it moved onto the trunk needs a new push for its checks.** Deleting a branch moves its children's PRs onto its parent before the branch goes (#112), but nothing pushes the children (their commits are kept, not rebased). A PR moved onto the trunk that way had its last checks run against the deleted branch, so a check the trunk requires stays "Expected — Waiting for status to be reported". `delete` now prints the same note `restack`, `submit` and `join` do since 0.19.39: "PR #N's checks last ran against X, not main: a check main requires waits until B is pushed again". (#162)
+- **`checkout <branch>` switches to that branch, and an argument `checkout` can't use exits 1.** `checkout` only understood a stack position, so `gh-stack checkout c --yes` ignored the name, skipped the picker (under `--yes`) and exited 0 on the old branch, which an agent reads as a switch. It now takes a branch name from any stack (switching stacks with it). A name no stack holds, an unknown option or a second argument exits 1 with what `checkout` takes. (#159)
+- **The `checkout`, `checkout --stack`, `delete` and `split` pickers exit 1 under `--yes`**, saying what to pass instead, where they printed "Cancelled" and exited 0. (#159)
+- **`up` at a fork and `top` with several tips name the branches and `gh-stack checkout <branch>` instead of saying to pass `--yes`.** Their "which branch?" prompt was reached even under `--yes`, and from an agent or without a TTY it refused with "Pass --yes", which the caller had already done. Under `--yes` they now stop with exit 1: "Several branches sit on a: b, c. Go to one with gh-stack checkout <branch>", and the refusal with nobody to answer says the same. (#158)
 
 ## 0.19.41
 
 ### 🐛 Fixes
 - **`log` draws sibling branches as a tree under their parent.** Several branches on one parent (the dependency sweep's safe batch with one breaking branch per group on it) were drawn as one straight line, so the second sibling read as sitting on the first. Siblings now hang under their parent's ◯, each with its own subtree, the way the PR descriptions' tree does since 0.19.38. A straight stack renders exactly as before, and the `[N]` numbers are unchanged (depth-first, as `checkout <N>` counts them). `join`'s preview of the resulting stack uses the same tree. (#156)
-
-### 🐛 Fixes
-- **`checkout <branch>` switches to that branch, and an argument `checkout` can't use exits 1.** `checkout` only understood a stack position, so `gh-stack checkout c --yes` ignored the name, skipped the picker (under `--yes`) and exited 0 on the old branch, which an agent reads as a switch. It now takes a branch name from any stack (switching stacks with it). A name no stack holds, an unknown option or a second argument exits 1 with what `checkout` takes. (#159)
-- **The `checkout`, `checkout --stack` and `delete` pickers exit 1 under `--yes`**, saying what to pass instead, where they printed "Cancelled" and exited 0. (#159)
-- **`up` at a fork and `top` with several tips name the branches and `gh-stack checkout <branch>` instead of saying to pass `--yes`.** Their "which branch?" prompt was reached even under `--yes`, and from an agent or without a TTY it refused with "Pass --yes", which the caller had already done. Under `--yes` they now stop with exit 1: "Several branches sit on a: b, c. Go to one with gh-stack checkout <branch>", and the refusal with nobody to answer says the same. (#158)
 
 ### 🧪 Tests
 - **`join` is tested to record a stuck incoming PR's old base when no other PR moved.** The metadata write after the retargets ran when any PR moved or the incoming PR was stuck, but every test had a child PR moving, so dropping the second half passed them all. The new test makes the child's move fail too, then checks the later `submit` moves the PR with the "checks last ran against" note. (#163)

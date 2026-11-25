@@ -124,6 +124,7 @@ describe("up and top at a fork name the branches instead of saying to pass --yes
     const res = await runCli(["up", "--yes"]);
 
     expect(res.exitCode).toBe(1);
+    expect(res.out).toContain("Multiple children — which branch? --yes can't choose for you.");
     expect(res.out).toContain(
       "Several branches sit on pr1: pr2, side. Go to one with gh-stack checkout <branch>.",
     );

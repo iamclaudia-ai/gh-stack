@@ -114,7 +114,8 @@ export function footer(title: string): void {
  * says what to pass.
  */
 function refuseToPick(message: string, instead: string): never {
-  p.cancel(`${message}: --yes can't choose for you. ${instead}`);
+  const lead = message.endsWith("?") ? message : `${message}:`;
+  p.cancel(`${lead} --yes can't choose for you. ${instead}`);
   process.exit(1);
 }
 
