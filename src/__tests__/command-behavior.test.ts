@@ -394,7 +394,11 @@ describe("buildStackViz", () => {
     test("a PR whose branch below has no PR yet names that branch", () => {
       const viz = buildStackViz([{ ...three[0]!, prNumber: null }, three[1]!], 1);
       expect(viz).toContain("Its base is `pr1`, not `main`");
-      expect(viz).toContain("Merge `pr1` first");
+      // It can't be merged first: it has no PR to merge. (#144)
+      expect(viz).toContain(
+        "Open a PR for `pr1` (`gh-stack submit` from it) and merge that first, or land the stack with `gh-stack merge`.",
+      );
+      expect(viz).not.toContain("Merge `pr1` first");
     });
 
     test("the bottom of a split stack warns about its base PR in the other stack", () => {
@@ -493,6 +497,108 @@ describe("buildStackViz", () => {
       });
       // A base branch no stack tracks: assume main rather than name the branch.
       expect((await resolveBaseRef(meta, meta.stacks.orphan, null)).trunk).toBe("main");
+    });
+  });
+
+  // #144: siblings hang under their shared parent instead of reading as a
+  // straight line; a straight stack renders exactly as it always has.
+  describe("tree", () => {
+    const info = (branch: string, parent: string, pr: number | null, title: string) => ({
+      branch,
+      parent,
+      prNumber: pr,
+      prTitle: title,
+      prUrl: null,
+    });
+    const rows = (viz: string) => viz.slice(viz.indexOf("<pre>\n") + 6, viz.indexOf("\n</pre>"));
+
+    test("a straight stack is one column, byte for byte as before", () => {
+      const three = [
+        info("pr1", "main", 1, "One"),
+        info("pr2", "pr1", 2, "Two"),
+        info("pr3", "pr2", 3, "Three"),
+      ];
+      expect(rows(buildStackViz(three, 1))).toBe(
+        ["⚫ main", "┃", "┣━ #1 One", "┃", "┣━ #2 Two 👈", "┃", "┗━ #3 Three"].join("\n"),
+      );
+    });
+
+    test("siblings hang under their parent (the dependency sweep's shape)", () => {
+      const sweep = [
+        info("batch", "main", 485, "Batch"),
+        info("expo", "batch", 486, "Expo"),
+        info("oxfmt", "batch", 487, "Oxfmt"),
+      ];
+      expect(rows(buildStackViz(sweep, 2))).toBe(
+        ["⚫ main", "┃", "┗━ #485 Batch", "   ┣━ #486 Expo", "   ┗━ #487 Oxfmt 👈"].join("\n"),
+      );
+    });
+
+    test("a sibling's own child hangs under that sibling", () => {
+      const tree = [
+        info("a", "main", 1, "Batch"),
+        info("b", "a", 2, "Breaking one"),
+        info("b2", "b", 4, "On top of b"),
+        info("c", "a", 3, "Breaking two"),
+      ];
+      expect(rows(buildStackViz(tree, 2))).toBe(
+        [
+          "⚫ main",
+          "┃",
+          "┗━ #1 Batch",
+          "   ┣━ #2 Breaking one",
+          "   ┃  ┗━ #4 On top of b 👈",
+          "   ┗━ #3 Breaking two",
+        ].join("\n"),
+      );
+    });
+
+    test("the last sibling's own chain hangs under it with no guide beside it", () => {
+      const tree = [
+        info("a", "main", 1, "A"),
+        info("b", "a", 2, "B"),
+        info("c", "a", 3, "C"),
+        info("c2", "c", 4, "C2"),
+      ];
+      expect(rows(buildStackViz(tree, 3))).toBe(
+        ["⚫ main", "┃", "┗━ #1 A", "   ┣━ #2 B", "   ┗━ #3 C", "      ┗━ #4 C2 👈"].join("\n"),
+      );
+    });
+
+    test("a straight run stays a column up to the branch that forks", () => {
+      const forked = [
+        info("a", "main", 1, "A"),
+        info("b", "a", 2, "B"),
+        info("c", "b", 3, "C"),
+        info("d", "b", null, "D"),
+      ];
+      expect(rows(buildStackViz(forked, 0))).toBe(
+        ["⚫ main", "┃", "┣━ #1 A 👈", "┃", "┗━ #2 B", "   ┣━ #3 C", "   ┗━ (no PR yet) D"].join(
+          "\n",
+        ),
+      );
+    });
+
+    test("several roots on the trunk branch from the base, and none is warned", () => {
+      const roots = [
+        info("a", "main", 1, "A"),
+        info("a2", "a", 2, "A2"),
+        info("b", "main", 3, "B"),
+      ];
+      expect(rows(buildStackViz(roots, 2))).toBe(
+        ["⚫ main", "┃", "┣━ #1 A", "┃  ┗━ #2 A2", "┗━ #3 B 👈"].join("\n"),
+      );
+      // The second root sits on main too: before #145 it was told to merge the first.
+      expect(buildStackViz(roots, 2)).not.toContain("Don't merge");
+      expect(buildStackViz(roots, 1)).toContain("Its base is #1's branch");
+    });
+
+    test("siblings on a split stack's base hang from the base PR", () => {
+      const base = { label: "batch", prNumber: 11, prUrl: null, trunk: "main" };
+      const roots = [info("x", "batch", 12, "X"), info("y", "batch", 13, "Y")];
+      expect(rows(buildStackViz(roots, 0, base))).toBe(
+        ["⚫ #11 batch", "┃", "┣━ #12 X 👈", "┗━ #13 Y"].join("\n"),
+      );
     });
   });
 

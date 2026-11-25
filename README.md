@@ -448,7 +448,17 @@ Parentheses avoid colliding with `[TICKET-123]` tags. Re-running `submit` after 
 ┗━ #124 feat: frontend UI (2/2) 👈
 ```
 
-Every PR above the bottom one also gets a warning, because its base on GitHub is the branch below it: merging it there squashes it into that branch and closes it, and nothing reaches `main`.
+Siblings (several branches on one parent) hang under that parent:
+
+```
+⚫ main
+┃
+┗━ #485 deps: safe updates (1/3)
+   ┣━ #486 deps: Expo 55 (2/3)
+   ┗━ #487 deps: oxfmt 0.30 (3/3) 👈
+```
+
+Every PR above the bottom one also gets a warning, because its base on GitHub is the branch it sits on: merging it there squashes it into that branch and closes it, and nothing reaches `main`. If that branch has no PR yet, the warning says to open one first.
 
 > [!WARNING]
 > **Don't merge this PR on GitHub.** Its base is #123's branch, not `main`: merging it here squashes it into that branch and closes it for good, with nothing reaching `main`. Merge #123 first, or land the stack with `gh-stack merge`.
