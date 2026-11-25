@@ -39,6 +39,8 @@ export interface BaseRef {
 
 export interface BranchPrInfo {
   branch: string;
+  /** The branch's recorded parent: the stack's base, or another branch in the list. */
+  parent: string;
   prNumber: number | null;
   prTitle: string;
   prUrl: string | null;
@@ -104,12 +106,22 @@ export function publishedBranches(stack: Stack, ordered: string[]): string[] {
   );
 }
 
+/** The entries a stack's viz lists, built from metadata alone (no network). */
+export function stackBranchInfos(
+  stack: Stack,
+  ordered: string[],
+  nwo: string | null,
+): BranchPrInfo[] {
+  return publishedBranches(stack, ordered).map((b) => toBranchInfo(stack, b, nwo));
+}
+
 /** Build a BranchPrInfo from metadata alone (no network). */
 function toBranchInfo(stack: Stack, branch: string, nwo: string | null): BranchPrInfo {
   const bm = stack.branches[branch]!;
   const prNumber = bm.pr ?? null;
   return {
     branch,
+    parent: bm.parent,
     prNumber,
     prTitle: bm.prTitle || bm.description || branchToTitle(branch),
     prUrl: prNumber ? prUrlFor(nwo, prNumber) : null,
@@ -303,7 +315,7 @@ export async function refreshStackViz(
 
   let dirty = await backfillTitles(stack, ordered);
 
-  const branchInfos = publishedBranches(stack, ordered).map((b) => toBranchInfo(stack, b, nwo));
+  const branchInfos = stackBranchInfos(stack, ordered, nwo);
   const baseRef = await resolveBaseRef(meta, stack, nwo);
 
   // Render every block locally and decide what needs writing — no network yet.
@@ -483,10 +495,16 @@ export function upperPrWarning(
   targetIndex: number,
   base: BaseRef,
 ): string | null {
+  // The PR's base is its branch's recorded parent, not the entry listed above
+  // it: siblings (several branches on one parent, as the dependency sweep
+  // builds) sit next to each other in the list. (#124, #131)
+  const parent = branches[targetIndex]!.parent;
   let below: { prNumber: number | null; branch: string };
-  if (targetIndex > 0) below = branches[targetIndex - 1]!;
-  else if (base.trunk != null) below = { prNumber: base.prNumber ?? null, branch: base.label };
-  else return null;
+  if (parent !== base.label) {
+    below = branches.find((b) => b.branch === parent) ?? { prNumber: null, branch: parent };
+  } else if (base.trunk != null) {
+    below = { prNumber: base.prNumber ?? null, branch: base.label };
+  } else return null;
 
   const trunk = `\`${base.trunk ?? base.label}\``;
   const pr = below.prNumber != null ? `#${below.prNumber}` : null;
