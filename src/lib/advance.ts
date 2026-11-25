@@ -264,7 +264,7 @@ export type AdvanceResult =
 
 /**
  * Re-root each survivor onto `targetRef`, dropping its merged parent's
- * now-squashed commits, push it, and repoint its PR base to `recordedBase`.
+ * now-squashed commits, repoint its PR base to `recordedBase`, and push it.
  * Then drop the whole merged run from the stack metadata. Survivors left side
  * by side on the trunk become one stack each (see splitMultiRootStack).
  *
